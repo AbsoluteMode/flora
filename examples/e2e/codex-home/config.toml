@@ -1,0 +1,12 @@
+# A private CODEX_HOME for the e2e stand: codex talks to OpenRouter and never
+# reads your own ~/.codex/config.toml. `wire_api` has to be "responses".
+model = "openai/gpt-4o-mini"
+model_provider = "openrouter"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"

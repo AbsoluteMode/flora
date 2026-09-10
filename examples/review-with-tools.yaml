@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# Tools per node: the implementing agent gets a database MCP server and two
+# flora-native tools — `read_context` (this run's params and outputs) and
+# `call_workflow` (run review.yaml as a nested workflow and get its verdict).
+# Only what is listed under `tools:` is mounted; the harness sees nothing else.
+name: review-with-tools
+version: 1
+params:
+  task: { required: true }
+  db_url: { default: 'postgresql://localhost/app' }
+
+steps:
+  - id: implement
+    title: Implement the change with a reviewer on call
+    executor: { harness: claude-code, timeout_min: 30 }
+    tools:
+      - mcp:
+          name: db
+          command: npx
+          args: ['-y', '@modelcontextprotocol/server-postgres', '{{db_url}}']
+      - flora: call_workflow
+        workflow: ./review.yaml
+      - flora: read_context
+    prompt: |
+      {{task}}
+
+      Inspect the database through the `db` tools when you need real data.
+      When the change is complete, call `call_workflow` with workflow "./review.yaml";
+      fix whatever it reports and call it again, until the verdict is REVIEW_CLEAN.
+    verify:
+      - type: command
+        run: 'git diff --stat --exit-code'
+        expect_exit: 1

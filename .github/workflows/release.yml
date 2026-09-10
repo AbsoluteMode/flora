@@ -1,0 +1,71 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require matching package and release versions
+        run: node -e "if(process.env.GITHUB_REF_NAME!=='v'+require('./package.json').version)process.exit(1)"
+  build:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Attach the npm tarball to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release-assets
+          npm pack --pack-destination release-assets
+          cd release-assets
+          sha256sum *.tgz > SHA256SUMS.txt
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --clobber
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: npm registry is optional
+        if: env.NODE_AUTH_TOKEN == ''
+        run: echo 'NPM_TOKEN is absent; the tarball on the GitHub release is the package.'
+      - uses: actions/checkout@v4
+        if: env.NODE_AUTH_TOKEN != ''
+      - uses: actions/setup-node@v4
+        if: env.NODE_AUTH_TOKEN != ''
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish the same tarball to npm
+        if: env.NODE_AUTH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern 'absolutemode-flora-*.tgz'
+          if [ "$REPOSITORY_PRIVATE" = 'false' ]; then
+            npm publish absolutemode-flora-*.tgz --provenance --access public
+          else
+            npm publish absolutemode-flora-*.tgz --access public
+          fi

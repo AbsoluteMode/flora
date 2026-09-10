@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# The authoring loop, for real: Claude Code gets flora's own MCP server as an
+# external tool, must validate a broken workflow, fix it from the error paths
+# it gets back, and validate again until the contract is green. flora then
+# runs what the agent wrote.
+name: e2e-authoring
+params:
+  flora_bin: { required: true }
+
+steps:
+  - id: author
+    title: Claude Code fixes a workflow with validate_workflow
+    executor: { harness: claude-code, timeout_min: 6, stall_min: 3 }
+    tools:
+      - mcp: { name: flora_authoring, command: node, args: ['{{flora_bin}}', 'mcp'] }
+    prompt: |
+      Use only the MCP tools from the flora_authoring server.
+      1. Call describe_contract once and read it.
+      2. Call validate_workflow with this YAML exactly as given:
+
+         name: fixme
+         steps:
+           - id: build
+             executor: { harness: command }
+             run: npm test
+             verfy:
+               - type: command
+                 run: echo {{steps.build.output}}
+
+      3. Using the returned errors and their paths, produce a corrected YAML that keeps the same intent
+         (a command step that runs `npm test` with a command check that uses only `node`, no other tools)
+         and call validate_workflow again. Repeat until it returns ok: true.
+      Then report {"ok": true, "attempts": <number of validate_workflow calls>, "yaml": "<the final YAML>"}.
+    output:
+      type: json
+      schema: { type: object, required: [ok, attempts, yaml], properties: { ok: { const: true }, attempts: { type: integer, minimum: 2 } } }
+
+  - id: recheck
+    title: flora itself validates and runs what the agent wrote
+    executor: { harness: command }
+    run: 'node -e "const c = require(process.env.FLORA_CONTEXT); require(''fs'').writeFileSync(''authored.yaml'', c.steps.author.output.yaml)"'
+    verify:
+      - type: command
+        run: 'node "{{flora_bin}}" run authored.yaml --cwd .'
+        expect_match: 'run passed'

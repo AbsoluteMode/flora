@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# A reviewer another workflow can call through the flora `call_workflow` tool
+# (see review-with-tools.yaml). Returns a structured verdict, not prose.
+name: review
+version: 1
+params:
+  focus: { default: correctness }
+
+steps:
+  - id: review
+    title: Independent review by a second harness
+    executor: { harness: codex, timeout_min: 15 }
+    prompt: |
+      Review the uncommitted changes in this repository (git diff), focusing on {{focus}}.
+      Do not edit anything. Report your verdict as JSON:
+      { "verdict": "REVIEW_CLEAN" | "DEFECT_FOUND", "notes": ["one line per finding"] }
+    output:
+      type: json
+      schema:
+        type: object
+        required: [verdict]
+        properties:
+          verdict: { enum: [REVIEW_CLEAN, DEFECT_FOUND] }
+          notes: { type: array, items: { type: string } }

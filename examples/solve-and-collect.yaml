@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# Fan-out / fan-in: three branches attack the same question at once, a quorum
+# decides whether the step passed, and a collector merges what came back.
+#
+# `isolation: shared` keeps this example runnable in any directory. In a git
+# repository leave the default (`worktree`): every branch then works in its own
+# detached worktree of HEAD and hands back a patch, reachable as
+# {{steps.solve.patches}} — the way you would run three agents on one task.
+name: solve-and-collect
+version: 1
+params:
+  question: { default: 'the answer' }
+
+steps:
+  - id: solve
+    title: Three independent attempts
+    parallel:
+      require: quorum:2
+      isolation: shared
+      branches:
+        - title: Fast and shallow
+          executor: { harness: command }
+          run: 'node -e "setTimeout(() => console.log(JSON.stringify({ by: ''fast'', answer: 42 })), 500)"'
+          output: { type: json, schema: { type: object, required: [answer] } }
+        - title: Slow and careful
+          executor: { harness: command }
+          run: 'node -e "setTimeout(() => console.log(JSON.stringify({ by: ''careful'', answer: 42 })), 1000)"'
+          output: { type: json, schema: { type: object, required: [answer] } }
+        - title: Flaky one
+          executor: { harness: command }
+          run: 'node -e "process.exit(1)"'
+          output: { type: json }
+
+  - id: collect
+    title: Merge the answers that came back
+    executor: { harness: command }
+    run: >-
+      node -e "const ctx = require(process.env.FLORA_CONTEXT);
+      const answers = ctx.steps.solve.outputs.filter(Boolean);
+      const agreed = new Set(answers.map(a => a.answer)).size === 1;
+      console.log(JSON.stringify({ question: ctx.params.question, answers: answers.length, agreed, answer: agreed ? answers[0].answer : null }))"
+    output:
+      type: json
+      schema: { type: object, required: [answers, agreed] }
+    verify:
+      - type: command
+        run: 'node -e "console.log(require(process.env.FLORA_CONTEXT).steps.solve.outputs.length)"'
+        expect_match: '3'

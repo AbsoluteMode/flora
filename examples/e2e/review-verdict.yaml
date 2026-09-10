@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# The workflow 04-tools lets the agent call. No model: a fixed verdict, so
+# the check can tell whether the agent really went through call_workflow.
+name: review-verdict
+steps:
+  - id: verdict
+    executor: { harness: command }
+    run: 'node -e "console.log(JSON.stringify({ verdict: ''REVIEW_CLEAN'', token: ''owl-311'' }))"'
+    output: { type: json }

@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# Data flow between steps: a source produces JSON, a converter reshapes it,
+# a writer stores it in the user's own sqlite database, and the verifier
+# checks the database — not the executor's word for it.
+#
+# Two ways data travels:
+#   {{steps.<id>.output…}}  in prompts and check expectations (never in run:)
+#   $FLORA_CONTEXT           a JSON file with params + every step's output,
+#                            rewritten before each step, for shell commands
+name: data-pipeline
+version: 1
+
+steps:
+  - id: fetch
+    title: Pull the records (stand-in for an API call)
+    executor: { harness: command }
+    run: >-
+      node -e "console.log(JSON.stringify({ items: [ { id: 1, name: 'fern', price: '12.50' }, { id: 2, name: 'moss', price: '4.00' } ] }))"
+    output:
+      type: json
+      schema:
+        type: object
+        required: [items]
+        properties:
+          items: { type: array, minItems: 1 }
+
+  - id: convert
+    title: Normalise prices into cents
+    executor: { harness: command }
+    run: >-
+      node -e "const ctx = require(process.env.FLORA_CONTEXT);
+      const rows = ctx.steps.fetch.output.items.map(i => ({ id: i.id, name: i.name, cents: Math.round(Number(i.price) * 100) }));
+      console.log(JSON.stringify(rows))"
+    output:
+      type: json
+      schema: { type: array, items: { type: object, required: [id, name, cents] } }
+    verify:
+      - type: command
+        run: 'echo converted'
+        expect_match: converted
+
+  - id: store
+    title: Write the rows into a local sqlite database
+    executor: { harness: command }
+    run: >-
+      node --disable-warning=ExperimentalWarning -e "const { DatabaseSync } = require('node:sqlite');
+      const ctx = require(process.env.FLORA_CONTEXT);
+      const db = new DatabaseSync('catalog.db');
+      db.exec('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, cents INTEGER NOT NULL)');
+      const insert = db.prepare('INSERT OR REPLACE INTO items (id, name, cents) VALUES (?, ?, ?)');
+      for (const row of ctx.steps.convert.output) insert.run(row.id, row.name, row.cents);
+      console.log(JSON.stringify({ inserted: ctx.steps.convert.output.length }))"
+    output:
+      type: json
+      schema: { type: object, required: [inserted] }
+    verify:
+      # The verifier reads the database itself; the expectation is built from
+      # the source step's output, so the two ends of the pipeline must agree.
+      - type: command
+        run: >-
+          node --disable-warning=ExperimentalWarning -e "const { DatabaseSync } = require('node:sqlite');
+          const row = new DatabaseSync('catalog.db').prepare('SELECT COUNT(*) AS n, SUM(cents) AS total FROM items').get();
+          console.log(row.n + ' rows, ' + row.total + ' cents')"
+        expect_match: '{{steps.fetch.output.items.length}} rows, 1650 cents'
+      - type: artifact
+        path: catalog.db

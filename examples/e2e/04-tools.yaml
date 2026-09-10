@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# Tools per node, for real: Claude Code gets only the flora-native tools,
+# must read a value out of the run context through read_context, then run
+# another workflow through call_workflow and report what it returned.
+# A plain command step then checks both answers against the source of truth.
+# (Copy review-verdict.yaml into the run directory first.)
+name: e2e-tools
+params:
+  secret: { default: marigold-7 }
+
+steps:
+  - id: ask
+    title: Claude Code uses read_context and call_workflow
+    executor: { harness: claude-code, timeout_min: 6, stall_min: 3 }
+    tools:
+      - flora: read_context
+      - flora: call_workflow
+        workflow: ./review-verdict.yaml
+    prompt: |
+      Two tasks, using only the MCP tools you were given:
+      1. Call read_context with path "params.secret" and remember the value.
+      2. Call call_workflow with workflow "./review-verdict.yaml" (no params) and find the field "token"
+         inside the output of its step "verdict".
+      Then report {"secret": "<value from 1>", "token": "<token from 2>"}.
+    output:
+      type: json
+      schema: { type: object, required: [secret, token] }
+
+  - id: check
+    title: Compare the agent's answers with the truth
+    executor: { harness: command }
+    run: 'node -e "const c = require(process.env.FLORA_CONTEXT); console.log(c.steps.ask.output.secret + ''/'' + c.steps.ask.output.token)"'
+    verify:
+      - type: command
+        run: 'node -e "const c = require(process.env.FLORA_CONTEXT); console.log(c.steps.ask.output.secret + ''/'' + c.steps.ask.output.token)"'
+        expect_match: '{{params.secret}}/owl-311'

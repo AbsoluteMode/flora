@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# Fan-out across three different agents on the same task, worktree isolation
+# (the run directory must be a git repository), quorum, patches, a collector.
+name: e2e-parallel
+params:
+  script: { required: true }
+
+steps:
+  - id: solve
+    title: Three agents, one question, separate worktrees
+    parallel:
+      require: quorum:2
+      branches:
+        - title: Claude Code
+          executor: { harness: claude-code, timeout_min: 5, stall_min: 3, args: ['--allowedTools', 'Write,Edit,Bash'] }
+          prompt: |
+            Write the number of minutes in a day into a file named answer.txt (digits only), then report {"answer": <that number>, "by": "claude-code"}. Do not ask questions.
+          output: { type: json, schema: { type: object, required: [answer, by] } }
+          verify:
+            - type: artifact
+              path: answer.txt
+              contains: '1440'
+        - title: Codex
+          executor: { harness: codex, timeout_min: 5, stall_min: 3 }
+          prompt: |
+            Create a file named answer.txt containing the number of minutes in a day (digits only), then answer with exactly one JSON object {"answer": <that number>, "by": "codex"}.
+          output: { type: json, schema: { type: object, required: [answer, by] } }
+          verify:
+            - type: artifact
+              path: answer.txt
+              contains: '1440'
+        - title: gemini flash via a plain command
+          executor: { harness: command, timeout_min: 3 }
+          run: 'node "{{script}}" --model google/gemini-2.5-flash --json --write answer.txt --prompt "How many minutes are in a day? Reply as {\"answer\": <number>, \"by\": \"gemini\"}"'
+          output: { type: json, schema: { type: object, required: [answer, by] } }
+
+  - id: collect
+    title: Merge whatever came back
+    executor: { harness: command }
+    run: >-
+      node -e "const c = require(process.env.FLORA_CONTEXT);
+      const got = c.steps.solve.outputs.filter(Boolean);
+      const answers = got.map(o => Number(o.answer));
+      console.log(JSON.stringify({ voters: got.map(o => o.by), agreed: new Set(answers).size === 1, answer: answers[0] ?? null, patches: c.steps.solve.patches.filter(Boolean).length }))"
+    output: { type: json, schema: { type: object, required: [voters, agreed, answer] } }

@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# Smallest possible contract: one step, executed by a plain command, verified by the verifier.
+name: hello
+version: 1
+params:
+  message: { default: 'hello from flora' }
+
+steps:
+  - id: write-greeting
+    title: Write the greeting file
+    executor:
+      harness: command
+    run: 'echo "{{message}}" > greeting.txt'
+    verify:
+      - type: artifact
+        path: greeting.txt
+        contains: '{{message}}'
+      - type: command
+        run: 'node -e "console.log(require(''node:fs'').statSync(''greeting.txt'').size)"'
+        expect_exit: 0

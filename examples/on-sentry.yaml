@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# An event-driven contract: `flora watch examples/` polls Sentry (token from
+# $SENTRY_AUTH_TOKEN, never from this file) and, for every new unresolved issue
+# matching `match`, runs the triage step once — the issue id is the dedup key.
+name: sentry-triage
+version: 1
+on:
+  sentry:
+    org: my-org
+    project: backend
+    query: 'is:unresolved'
+    match: 'TimeoutError|ECONNRESET'
+    interval_sec: 60
+
+steps:
+  - id: triage
+    title: Explain the failure and propose a fix
+    executor: { harness: claude-code, timeout_min: 20 }
+    prompt: |
+      A new Sentry issue matched our triage filter:
+        {{event.title}}
+        {{event.url}}
+      Find the code path in this repository, explain the likely cause in TRIAGE.md,
+      and propose a fix as an unstaged diff. Do not commit.
+    verify:
+      - type: artifact
+        path: TRIAGE.md
+        contains: '{{event.title}}'

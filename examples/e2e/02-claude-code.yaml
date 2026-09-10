@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# Real Claude Code, headless: it must touch the file system and honour a JSON
+# output contract; the verifier reads the file itself.
+name: e2e-claude-code
+steps:
+  - id: write
+    title: Claude Code writes a file and reports in JSON
+    executor: { harness: claude-code, timeout_min: 5, stall_min: 3, args: ['--allowedTools', 'Write,Edit,Bash'] }
+    prompt: |
+      Create a file named pong.txt in the current directory containing exactly the word pong (no newline needed).
+      Do not ask questions. When done, report {"done": true, "file": "pong.txt"}.
+    output:
+      type: json
+      schema: { type: object, required: [done, file], properties: { done: { const: true } } }
+    verify:
+      - type: artifact
+        path: pong.txt
+        contains: pong

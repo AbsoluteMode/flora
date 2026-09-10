@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# A scheduled contract: `flora watch examples/` fires this every weekday at 09:00
+# (local time). The cron event is reachable as {{event.*}} and $FLORA_CONTEXT.event.
+name: nightly-audit
+version: 1
+on:
+  cron: '0 9 * * 1-5'
+
+steps:
+  - id: audit
+    title: Check the working tree is clean at the start of the day
+    executor: { harness: command }
+    run: 'git status --porcelain'
+    verify:
+      - type: command
+        run: 'git status --porcelain'
+        expect_exit: 0

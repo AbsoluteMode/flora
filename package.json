@@ -1,0 +1,64 @@
+{
+  "name": "@absolutemode/flora",
+  "version": "0.5.1",
+  "description": "Local-first workflow contracts for AI coding harnesses — give your harness an API",
+  "license": "MIT",
+  "homepage": "https://github.com/AbsoluteMode/flora-public#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbsoluteMode/flora-public.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AbsoluteMode/flora-public/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "workflow",
+    "orchestration",
+    "claude-code",
+    "codex",
+    "llm",
+    "cli"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "flora": "./bin/flora.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "!src/**/__tests__",
+    "web",
+    "schema",
+    "examples",
+    "docs/architecture.ru.md",
+    "docs/analytics.ru.md",
+    "docs/step-inspection.md",
+    "docs/installation.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "flora": "node bin/flora.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run typecheck"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.20.0",
+    "tsx": "^4.19.4",
+    "yaml": "^2.6.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}

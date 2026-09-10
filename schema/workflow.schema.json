@@ -1,0 +1,346 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/AbsoluteMode/flora-public/main/schema/workflow.schema.json",
+  "title": "flora workflow",
+  "description": "A named, versioned execution contract: which steps run, on which harness, and what proves each step is done. The verifier runs the checks itself; the next step is not released until the current contract is closed.",
+  "type": "object",
+  "required": ["name", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workflow name. Shows up in the journal, `flora runs` and the viewer."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Contract version, for your own bookkeeping."
+    },
+    "description": {
+      "type": "string",
+      "description": "One line on what the workflow does — shown by `flora inspect` and `flora workflows` when the workflow travels as a bundle."
+    },
+    "params": {
+      "type": "object",
+      "description": "Input parameters. Passed with `flora run … --param name=value`; substitute `{{name}}` (or `{{params.name}}`) in prompts, commands and checks.",
+      "additionalProperties": { "$ref": "#/definitions/param" }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Executed in order. A step runs only after the previous one passed its verification.",
+      "items": { "$ref": "#/definitions/step" }
+    },
+    "on": { "$ref": "#/definitions/trigger" }
+  },
+  "definitions": {
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Triggers for `flora watch`: a cron schedule and/or polled sources. The event is reachable as {{event.*}} in prompts and check expectations and as `.event` in $FLORA_CONTEXT (never inside a shell line).",
+      "properties": {
+        "cron": {
+          "type": "string",
+          "pattern": "^\\s*\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s*$",
+          "description": "Five fields, local time: minute hour day-of-month month day-of-week. `*`, `*/n`, `a-b`, `a,b,c`. Missed ticks while the machine slept are not caught up."
+        },
+        "sentry": { "$ref": "#/definitions/sentry_source" },
+        "command": { "$ref": "#/definitions/command_source" }
+      }
+    },
+    "sentry_source": {
+      "type": "object",
+      "required": ["org", "project"],
+      "additionalProperties": false,
+      "description": "Polls Sentry's issue list; every new matching issue id starts one run. The token comes from $SENTRY_AUTH_TOKEN, never from the file.",
+      "properties": {
+        "org": { "type": "string", "minLength": 1 },
+        "project": { "type": "string", "minLength": 1 },
+        "query": { "type": "string", "description": "Issue search, e.g. `is:unresolved`." },
+        "match": { "type": "string", "description": "Regular expression the issue title or culprit must match." },
+        "interval_sec": { "type": "number", "minimum": 5, "description": "Poll interval (default 60). Errors back off exponentially up to 15 minutes." },
+        "url": { "type": "string", "description": "API host for self-hosted installs (default https://sentry.io)." }
+      }
+    },
+    "command_source": {
+      "type": "object",
+      "required": ["run"],
+      "additionalProperties": false,
+      "description": "Polls by running a command: a JSON object per stdout line is one event each (its `id` is the dedup key), plain text is one event, empty output is silence.",
+      "properties": {
+        "run": { "type": "string", "minLength": 1, "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } },
+        "interval_sec": { "type": "number", "minimum": 1, "description": "Poll interval (default 300)." },
+        "timeout_min": { "type": "number", "minimum": 0, "description": "Wall-clock ceiling for one poll (default 5)." }
+      }
+    },
+    "param": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "boolean", "description": "Refuse to run when the value is missing." },
+        "default": { "type": "string", "description": "Used when no value is passed." },
+        "description": { "type": "string", "description": "What to pass — shown by `flora inspect`." }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$",
+          "description": "Unique within the workflow. Later steps reference this step's output as `{{steps.<id>.output…}}`, so it must be a plain identifier."
+        },
+        "title": { "type": "string", "description": "Human-readable label for the CLI and the viewer." },
+        "needs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
+          "uniqueItems": true,
+          "description": "Steps this one waits for — ids declared earlier in the file. Without it a step waits for the one right above it. Steps whose needs are met run at the same time (up to FLORA_MAX_PARALLEL)."
+        },
+        "when": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run only if this holds after {{…}} substitution: `A == B`, `A != B`, `A` (truthy), `!A`. Otherwise the step is skipped and its dependants go on. `{{steps.<id>.status}}` is available."
+        },
+        "executor": { "$ref": "#/definitions/executor" },
+        "parallel": { "$ref": "#/definitions/parallel" },
+        "prompt": {
+          "type": "string",
+          "description": "Task text for a harness executor (claude-code, codex, harmonia). Placeholders: `{{params.*}}`, `{{steps.<id>.output…}}`."
+        },
+        "run": {
+          "type": "string",
+          "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" },
+          "description": "Shell command for the `command` executor. `{{params.*}}` is allowed; `{{steps.*}}` is not — a shell step reads earlier outputs from the JSON file at $FLORA_CONTEXT."
+        },
+        "verify": {
+          "type": "array",
+          "description": "Verification contract. The step passes only when every check passes; the verifier runs them, never the executor.",
+          "items": { "$ref": "#/definitions/check" }
+        },
+        "verify_in": {
+          "type": "string",
+          "enum": ["cwd", "worktree"],
+          "description": "Where the checks run. `cwd` (default): the run directory as the executor left it. `worktree`: a fresh detached worktree of HEAD — only what the executor committed can pass. Needs a git repository."
+        },
+        "output": { "$ref": "#/definitions/output" },
+        "on_fail": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "retry": { "type": "integer", "minimum": 0, "description": "Extra attempts after a failure. A retry after a broken output contract tells the agent what was wrong." }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "description": "Tools mounted into the harness for this step, and nothing beyond them: external MCP servers plus the flora-native `read_context` and `call_workflow`. Only claude-code and codex can mount tools.",
+          "items": { "$ref": "#/definitions/tool" }
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            { "required": ["executor"], "not": { "required": ["parallel"] } },
+            { "required": ["parallel"], "not": { "required": ["executor"] } }
+          ]
+        },
+        {
+          "if": { "required": ["parallel"] },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["prompt"] },
+                { "required": ["run"] },
+                { "required": ["verify"] },
+                { "required": ["verify_in"] },
+                { "required": ["output"] },
+                { "required": ["tools"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "required": ["executor"], "properties": { "executor": { "properties": { "harness": { "const": "command" } } } } },
+          "then": { "required": ["run"] }
+        },
+        {
+          "if": { "required": ["executor"], "properties": { "executor": { "properties": { "harness": { "not": { "const": "command" } } } } } },
+          "then": { "required": ["prompt"] }
+        },
+        {
+          "if": { "required": ["tools"] },
+          "then": { "properties": { "executor": { "properties": { "harness": { "enum": ["claude-code", "codex"] } } } } }
+        }
+      ]
+    },
+    "parallel": {
+      "type": "object",
+      "required": ["branches"],
+      "additionalProperties": false,
+      "description": "Fan-out: the branches run at the same time (at most FLORA_MAX_PARALLEL, default 3), each in its own git worktree of HEAD, and `require` decides whether the step passed. Later steps read `{{steps.<id>.outputs}}` (one entry per branch, null where it failed) and `{{steps.<id>.patches}}`.",
+      "properties": {
+        "require": {
+          "type": "string",
+          "pattern": "^(all|any|quorum:[1-9][0-9]*)$",
+          "description": "How many branches must pass: `all` (default), `any`, or `quorum:N`."
+        },
+        "isolation": {
+          "type": "string",
+          "enum": ["worktree", "shared"],
+          "description": "`worktree` (default): every branch in a detached worktree of HEAD, its changes handed back as a patch; needs a git repository. `shared`: all branches in the run directory, no patches."
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/branch" }
+        }
+      }
+    },
+    "branch": {
+      "type": "object",
+      "required": ["executor"],
+      "additionalProperties": false,
+      "description": "One branch of a parallel step: a step body without an id (it becomes `<step>[i]`), retries or nesting.",
+      "properties": {
+        "title": { "type": "string" },
+        "executor": { "$ref": "#/definitions/executor" },
+        "prompt": { "type": "string" },
+        "run": { "type": "string", "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } },
+        "verify": { "type": "array", "items": { "$ref": "#/definitions/check" } },
+        "output": { "$ref": "#/definitions/output" },
+        "tools": { "type": "array", "items": { "$ref": "#/definitions/tool" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "executor": { "properties": { "harness": { "const": "command" } } } } },
+          "then": { "required": ["run"] },
+          "else": { "required": ["prompt"] }
+        },
+        {
+          "if": { "required": ["tools"] },
+          "then": { "properties": { "executor": { "properties": { "harness": { "enum": ["claude-code", "codex"] } } } } }
+        }
+      ]
+    },
+    "tool": {
+      "description": "One tool source: `{ mcp: { name, command, args, env } }` starts an MCP server for the step; `{ flora: call_workflow, workflow }` lets the agent run another workflow and get its verdict; `{ flora: read_context }` lets it read this run's params and step outputs.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["mcp"],
+          "additionalProperties": false,
+          "properties": {
+            "mcp": {
+              "type": "object",
+              "required": ["name", "command"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$", "not": { "const": "flora" }, "description": "Server name; the harness sees its tools as mcp__<name>__<tool>. `flora` is reserved for the built-in tools." },
+                "command": { "type": "string", "minLength": 1, "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } },
+                "args": { "type": "array", "items": { "type": "string", "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } } },
+                "env": { "type": "object", "additionalProperties": { "type": "string", "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } }, "description": "Environment for the server process. Values may use {{params.*}}; secrets belong in params or the environment, not in the file." }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["flora", "workflow"],
+          "additionalProperties": false,
+          "properties": {
+            "flora": { "const": "call_workflow" },
+            "workflow": { "type": "string", "minLength": 1, "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" }, "description": "Workflow file the agent may run, relative to the step's working directory." }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["flora"],
+          "additionalProperties": false,
+          "properties": {
+            "flora": { "const": "read_context" }
+          }
+        }
+      ]
+    },
+    "executor": {
+      "type": "object",
+      "required": ["harness"],
+      "additionalProperties": false,
+      "properties": {
+        "harness": {
+          "type": "string",
+          "enum": ["claude-code", "codex", "harmonia", "command", "api"],
+          "description": "Which adapter executes the step: `claude-code` (claude -p), `codex` (codex exec), `harmonia` (harmonia run), `command` (a shell command) or `api` (one prompt → one completion from a model API named by `provider` and configured in ~/.flora/providers.yaml — never a default)."
+        },
+        "model": { "type": "string", "description": "Model passed through to the harness." },
+        "provider": { "type": "string", "description": "`api` harness: the provider's name in ~/.flora/providers.yaml (where the request goes, which environment variable holds the key)." },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "`api` harness: sampling temperature." },
+        "max_tokens": { "type": "integer", "minimum": 1, "description": "`api` harness: completion length cap." },
+        "timeout_min": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Wall-clock ceiling in minutes (default 15, 0 disables). Exceeding it kills the whole process tree."
+        },
+        "stall_min": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Silence ceiling in minutes (default 5, 0 disables): no output for this long counts as a hang and the process tree is killed."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra CLI arguments passed through to the harness."
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["command", "artifact"], "description": "`command`: run a shell command and judge its exit code / output. `artifact`: a file must exist (and contain a string)." },
+        "run": {
+          "type": "string",
+          "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" },
+          "description": "command: the shell command. `{{steps.*}}` is not allowed here either; read $FLORA_CONTEXT."
+        },
+        "expect_exit": { "type": "integer", "description": "command: required exit code (default 0)." },
+        "expect_match": { "type": "string", "description": "command: substring that must appear in the check's output. Placeholders allowed, including `{{steps.*}}`." },
+        "path": { "type": "string", "description": "artifact: path that must exist, relative to the run's working directory." },
+        "contains": { "type": "string", "description": "artifact: substring the file must contain. Placeholders allowed, including `{{steps.*}}`." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "command" } } },
+          "then": { "required": ["run"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "artifact" } } },
+          "then": { "required": ["path"] }
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Output contract: what the step hands to the steps after it. The value is journaled as `StepResult.output` and reachable as `{{steps.<id>.output…}}` and in $FLORA_CONTEXT.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["json", "text"],
+          "description": "`json`: a command's output is parsed as JSON; an agent is asked to end with one ```json block and the last valid block is taken. `text` (default): kept as is. Either way the value is capped at 256KB."
+        },
+        "schema": {
+          "type": "object",
+          "description": "JSON Schema the parsed value must satisfy (needs `type: json`). A mismatch fails the step with the reason."
+        }
+      },
+      "if": { "required": ["schema"] },
+      "then": { "properties": { "type": { "const": "json" } }, "required": ["type"] }
+    }
+  }
+}

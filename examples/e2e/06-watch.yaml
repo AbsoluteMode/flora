@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# A polled source produces an event; the triggered step asks a model the
+# question carried by the event and the verifier checks the written answer.
+#   flora watch examples/e2e/06-watch.yaml --once --param script=…/or-chat.mjs
+name: e2e-watch
+params:
+  script: { required: true }
+on:
+  command:
+    run: 'node -e "console.log(JSON.stringify({ id: ''q-capital-1'', question: ''What is the capital of France? Answer with the city name only.'' }))"'
+    interval_sec: 60
+
+steps:
+  - id: answer
+    title: gpt-4o-mini answers the question from the event
+    executor: { harness: command, timeout_min: 3 }
+    run: 'node "{{script}}" --model openai/gpt-4o-mini --context-path event.question --write answer.txt --prompt "Answer the question given in the context."'
+    verify:
+      - type: artifact
+        path: answer.txt
+        contains: Paris

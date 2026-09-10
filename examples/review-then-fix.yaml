@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# Two harnesses in one contract: Claude Code implements, Codex reviews.
+name: review-then-fix
+version: 1
+params:
+  task: { required: true }
+
+steps:
+  - id: implement
+    title: Implement the change
+    executor:
+      harness: claude-code
+      timeout_min: 20
+    prompt: |
+      {{task}}
+
+      Work in the current directory. When done, make sure the change is complete and consistent.
+    verify:
+      - type: command
+        run: 'git diff --stat --exit-code'
+        expect_exit: 1   # a non-empty diff must exist
+    on_fail:
+      retry: 1
+
+  - id: review
+    title: Independent review by a different harness
+    executor:
+      harness: codex
+      timeout_min: 15
+    prompt: |
+      Review the uncommitted changes in this repository (git diff). If you find a real defect,
+      print exactly DEFECT_FOUND and describe it. Otherwise print exactly REVIEW_CLEAN.
+    verify:
+      - type: command
+        run: 'true'
+        expect_exit: 0

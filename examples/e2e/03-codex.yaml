@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=../../schema/workflow.schema.json
+# Real Codex CLI, headless (`codex exec --json`): JSONL parsing, usage from
+# turn.completed, a JSON contract with a schema.
+name: e2e-codex
+steps:
+  - id: answer
+    title: Codex answers with a JSON object
+    executor: { harness: codex, timeout_min: 5, stall_min: 3, args: ['--skip-git-repo-check'] }
+    prompt: |
+      Compute 6 * 7 and answer with exactly one JSON object of the form {"answer": <number>}. Do not run any commands.
+    output:
+      type: json
+      schema: { type: object, required: [answer], properties: { answer: { const: 42 } } }

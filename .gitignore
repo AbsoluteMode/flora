@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.flora/
+*.log
+
+# Keep local run data and working copies out of source control.
+.claude/
+*.flora
+*.flora-run
+*.sqlite
+*.sqlite3
+*.db
+runs/

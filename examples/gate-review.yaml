@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=../schema/workflow.schema.json
+# A pre-push gate: `flora gate install examples/gate-review.yaml` makes git run
+# this before every push. A second harness reviews the commits about to leave
+# the machine; the push goes through only on REVIEW_CLEAN. The hook passes the
+# remote name and URL as params.
+name: gate-review
+version: 1
+params:
+  remote: { default: origin }
+  url: { default: '' }
+
+steps:
+  - id: review
+    title: Review the commits about to be pushed
+    executor: { harness: codex, timeout_min: 15 }
+    prompt: |
+      Commits are about to be pushed to {{remote}}. Run `git log --oneline @{upstream}..HEAD` and
+      `git diff @{upstream}...HEAD` (if there is no upstream yet, review `git show HEAD`).
+      Do not edit anything. Report your verdict as JSON:
+      { "verdict": "REVIEW_CLEAN" | "DEFECT_FOUND", "notes": ["one line per finding"] }
+    output:
+      type: json
+      schema:
+        type: object
+        required: [verdict]
+        properties:
+          verdict: { enum: [REVIEW_CLEAN, DEFECT_FOUND] }
+          notes: { type: array, items: { type: string } }
+
+  - id: gate
+    title: Block the push unless the review is clean
+    needs: [review]
+    executor: { harness: command }
+    run: >-
+      node -e "const v = require(process.env.FLORA_CONTEXT).steps.review.output;
+      console.log(v.verdict + (v.notes && v.notes.length ? ': ' + v.notes.join(' | ') : ''));
+      process.exit(v.verdict === 'REVIEW_CLEAN' ? 0 : 1)"
