@@ -1,6 +1,6 @@
 {
   "name": "@absolutemode/flora",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Local-first workflow contracts for AI coding harnesses — give your harness an API",
   "license": "MIT",
   "homepage": "https://github.com/AbsoluteMode/flora-public#readme",

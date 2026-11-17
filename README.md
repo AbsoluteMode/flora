@@ -18,7 +18,7 @@ flora requires Node 22.5 or newer. Download the npm tarball from the
 — see [Installing flora](docs/installation.md):
 
 ```bash
-npm install -g ./absolutemode-flora-0.6.3.tgz
+npm install -g ./absolutemode-flora-0.6.4.tgz
 flora doctor                         # which harnesses are installed and logged in, and what to fix
 ```
 
