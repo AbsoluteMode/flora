@@ -3,12 +3,13 @@ import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync }
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { BranchSpec, Evidence, PriorAttempt, RunEventHandler, RunRecord, StepArtifact, StepResult, StepSpec, Usage, WorkflowSpec } from './types'
-import { adapterFor } from './adapters/index'
+import type { BranchSpec, Evidence, ExecutorSpec, OutputRepair, OutputRepairSpec, PriorAttempt, RunEventHandler, RunRecord, StepArtifact, StepResult, StepSpec, Usage, WorkflowSpec } from './types'
+import { adapterFor, type HarnessAdapter, type RepairInput } from './adapters/index'
+import { DEFAULT_TIMEOUT_MIN } from './adapters/command'
 import { buildContext } from './context'
 import { explainFailure } from './doctor'
 import { addWorktree, isDirty, isGitRepo, pruneWorktrees, removeWorktree, worktreePatch } from './git'
-import { readOutput } from './output'
+import { readOutput, repairPrompt, type OutputResult } from './output'
 import { floraHome } from './paths'
 import { mcpServersFor } from './tools'
 import { evaluateWhen } from './when'
@@ -58,11 +59,13 @@ interface RunScope {
   contextPath: string
   contextDir: string
   stack: string[]
+  /** The workflow's `output_repair`, for steps and branches without their own. */
+  repairDefault?: OutputRepairSpec
   abort(): void
 }
 
 /** The executable part of a step or branch, after substitution. */
-type Body = Pick<BranchSpec, 'title' | 'executor' | 'prompt' | 'run' | 'verify' | 'output' | 'tools'> & {
+type Body = Pick<BranchSpec, 'title' | 'executor' | 'prompt' | 'run' | 'verify' | 'output' | 'output_repair' | 'tools'> & {
   id: string
   verify_in?: 'cwd' | 'worktree'
 }
@@ -141,6 +144,7 @@ export async function runWorkflow(spec: WorkflowSpec, options: RunOptions): Prom
       contextPath,
       contextDir,
       stack,
+      repairDefault: spec.output_repair,
       abort: () => abort.abort()
     }
     const step = substituteStep(rawStep, context)
@@ -296,7 +300,7 @@ async function runBody(
       : body.prompt
 
   const adapter = adapterFor(body.executor.harness)
-  const evidence = await adapter.execute({
+  let evidence = await adapter.execute({
     runId: scope.record.runId,
     stepId: body.id,
     spec: body.executor,
@@ -318,6 +322,20 @@ async function runBody(
     }),
     onOutput: (chunk) => onEvent({ type: 'executor_output', stepId: body.id, chunk, ...at })
   })
+
+  // Only a clean zero is a success. `null` means the harness never ran
+  // (spawn failed) or died to a signal — neither is evidence of work done.
+  const executorOk = evidence.exitCode === 0
+  let output = executorOk ? readOutput(evidence.output, body.output, body.executor.harness) : null
+  // The work is done but its answer broke the output contract: ask the same
+  // agent to fix the form before calling the step a failure.
+  let outputRepairs: OutputRepair[] = []
+  if (output && !output.ok && output.repairable && isAgent) {
+    const repaired = await repairOutput(adapter, body, cwd, attempt, evidence, output, scope, branch)
+    evidence = repaired.evidence
+    output = repaired.output
+    outputRepairs = repaired.repairs
+  }
 
   onEvent({ type: 'step_verifying', stepId: body.id, checks: body.verify?.length ?? 0, ...at })
   // `verify_in: worktree`: the checks see the committed state only, so an
@@ -345,10 +363,6 @@ async function runBody(
     onEvent({ type: 'check_result', stepId: body.id, passed: check.passed, detail: check.detail, ...at })
   }
 
-  // Only a clean zero is a success. `null` means the harness never ran
-  // (spawn failed) or died to a signal — neither is evidence of work done.
-  const executorOk = evidence.exitCode === 0
-  const output = executorOk ? readOutput(evidence.output, body.output, body.executor.harness) : null
   const error = output && !output.ok ? output.error : undefined
   // A harness that never got going (not installed, not logged in, a config
   // it cannot parse) gets the sentence a person needs, not just a transcript.
@@ -368,10 +382,206 @@ async function runBody(
     ...(isAgent && prompt !== undefined ? { prompt } : {}),
     ...(!isAgent && body.run !== undefined ? { command: body.run } : {}),
     ...(artifacts.length ? { artifacts } : {}),
+    ...(outputRepairs.length ? { outputRepairs } : {}),
     ...(verifyWorktree ? { verifiedIn: 'worktree' as const } : {}),
     ...(output && output.ok && output.value !== undefined ? { output: output.value, ...describeOutput(output.value) } : {}),
     ...(error ? { outputError: error } : {}),
     ...(hint ?? verifyError ? { error: hint ?? verifyError } : {})
+  }
+}
+
+/** Repair requests per step attempt when nothing says otherwise. */
+export const DEFAULT_OUTPUT_REPAIR_ATTEMPTS = 2
+/** Wall-clock ceiling of one repair request, minutes, when nothing says otherwise. */
+export const DEFAULT_OUTPUT_REPAIR_TIMEOUT_MIN = 5
+/** How much of a repair answer the journal keeps. */
+const REPAIR_OUTPUT_KEEP = 64 * 1024
+
+/**
+ * The effective repair settings: the body's own, else the workflow's, else
+ * the defaults. One request may run for `timeout_min` (default 5), but never
+ * longer than the step's own `executor.timeout_min`; 0 on one side leaves the
+ * other side's limit, 0 on both means no wall-clock limit.
+ */
+export function outputRepairSettings(spec: OutputRepairSpec | undefined, executor: ExecutorSpec): { attempts: number; timeoutMin: number } {
+  const own = spec?.timeout_min ?? DEFAULT_OUTPUT_REPAIR_TIMEOUT_MIN
+  const step = executor.timeout_min ?? DEFAULT_TIMEOUT_MIN
+  return {
+    attempts: spec?.attempts ?? DEFAULT_OUTPUT_REPAIR_ATTEMPTS,
+    timeoutMin: own === 0 ? step : step === 0 ? own : Math.min(own, step)
+  }
+}
+
+type FailedOutput = Extract<OutputResult, { ok: false }>
+
+// WHY: docs/decisions/2026-11-15-output-repair.md
+
+/**
+ * Output repair. The agent did the work, but its answer is not the JSON the
+ * contract asks for. Flora goes back to the same agent — in its own session
+ * when the adapter can resume one and the session id is known (`resume`),
+ * otherwise once with a new short request quoting the answer (`fresh`) — with
+ * what is wrong, the schema and "return the same result in the required
+ * form". Read-only, no tools: the form changes, not the work. Every request
+ * is journaled (`output_repair_start` / `output_repair_result`) and its
+ * time, tokens and money are added to the step's evidence.
+ */
+async function repairOutput(
+  adapter: HarnessAdapter,
+  body: Body,
+  cwd: string,
+  attempt: number,
+  work: Evidence,
+  first: FailedOutput,
+  scope: RunScope,
+  branch?: number
+): Promise<{ evidence: Evidence; output: OutputResult; repairs: OutputRepair[] }> {
+  const { options, onEvent } = scope
+  const at = branch === undefined ? {} : { branch }
+  const settings = outputRepairSettings(body.output_repair ?? scope.repairDefault, body.executor)
+  const repairs: OutputRepair[] = []
+  const spent: Evidence[] = []
+  let output: OutputResult = first
+  let current = first
+  let previousAnswer = work.output
+  let sessionId = work.sessionId
+  let mode: OutputRepair['mode'] = adapter.repair && sessionId ? 'resume' : 'fresh'
+  // A fresh request is a conversion of a quoted answer, not a conversation: one is enough.
+  let limit = mode === 'resume' ? settings.attempts : Math.min(settings.attempts, 1)
+  let requestFailure: string | undefined
+
+  for (let n = 1; n <= limit; n++) {
+    if (options.signal?.aborted) break
+    const prompt = repairPrompt({ mode, issues: current.issues, output: body.output, ...(mode === 'fresh' ? { previous: previousAnswer } : {}) })
+    onEvent({
+      type: 'output_repair_start',
+      stepId: body.id,
+      attempt,
+      repair: n,
+      maxRepairs: limit,
+      mode,
+      ...(mode === 'resume' && sessionId ? { sessionId } : {}),
+      error: current.error,
+      errors: current.issues,
+      ...at
+    })
+    const input: RepairInput = {
+      runId: scope.record.runId,
+      stepId: body.id,
+      spec: { ...body.executor, timeout_min: settings.timeoutMin },
+      prompt,
+      cwd,
+      signal: options.signal,
+      env: scope.env,
+      output: body.output,
+      ...(mode === 'resume' ? { sessionId } : {}),
+      onOutput: (chunk) => onEvent({ type: 'executor_output', stepId: body.id, chunk, ...at })
+    }
+    // Without a repair route of its own the harness gets the message as a
+    // plain task — with the same rights the step had, and no output
+    // instruction appended twice.
+    const evidence = adapter.repair ? await adapter.repair(input) : await adapter.execute({ ...input, output: undefined })
+    spent.push(evidence)
+    const ran = evidence.exitCode === 0
+    const read = ran ? readOutput(evidence.output, body.output, body.executor.harness) : null
+    const passed = read?.ok === true
+    const resultError = !ran ? requestFailed(evidence, options.signal) : read && !read.ok ? read.error : undefined
+    repairs.push({
+      repair: n,
+      mode,
+      error: current.error,
+      errors: current.issues,
+      status: passed ? 'passed' : 'failed',
+      durationMs: evidence.durationMs,
+      exitCode: evidence.exitCode,
+      ...(resultError ? { resultError } : {}),
+      ...(evidence.costUsd !== undefined ? { costUsd: evidence.costUsd } : {}),
+      ...(evidence.usage ? { usage: evidence.usage } : {}),
+      ...(evidence.sessionId ? { sessionId: evidence.sessionId } : {}),
+      ...(evidence.stalled ? { stalled: true } : {}),
+      ...(evidence.timedOut ? { timedOut: true } : {}),
+      prompt,
+      output: evidence.output.length > REPAIR_OUTPUT_KEEP ? `${evidence.output.slice(0, REPAIR_OUTPUT_KEEP)}\n[… ${evidence.output.length - REPAIR_OUTPUT_KEEP} chars omitted]` : evidence.output
+    })
+    onEvent({
+      type: 'output_repair_result',
+      stepId: body.id,
+      attempt,
+      repair: n,
+      mode,
+      status: passed ? 'passed' : 'failed',
+      durationMs: evidence.durationMs,
+      exitCode: evidence.exitCode,
+      ...(resultError ? { error: resultError } : {}),
+      ...(read && !read.ok ? { errors: read.issues } : {}),
+      ...(evidence.costUsd !== undefined ? { costUsd: evidence.costUsd } : {}),
+      ...(evidence.usage ? { usage: evidence.usage } : {}),
+      ...at
+    })
+    if (read?.ok) {
+      output = read
+      requestFailure = undefined
+      break
+    }
+    if (!ran) {
+      requestFailure = resultError
+      // Killed or cancelled: another request would meet the same limit.
+      if (options.signal?.aborted || evidence.timedOut || evidence.stalled) break
+      // The session could not be continued: one fresh request, if the budget allows.
+      if (mode === 'resume') {
+        mode = 'fresh'
+        limit = Math.min(limit, n + 1)
+      }
+      continue
+    }
+    requestFailure = undefined
+    current = read as FailedOutput
+    output = current
+    previousAnswer = evidence.output
+    sessionId = evidence.sessionId ?? sessionId
+    if (!current.repairable) break
+  }
+
+  if (!output.ok && repairs.length) {
+    const count = `${repairs.length} request${repairs.length === 1 ? '' : 's'}`
+    output = {
+      ...output,
+      error: `${current.error} (output repair: ${count} did not fix it${requestFailure ? `; the last one failed: ${requestFailure}` : ''})`
+    }
+  }
+  return { evidence: spent.length ? addEvidence(work, spent) : work, output, repairs }
+}
+
+/** Why a repair request produced no answer to read. */
+function requestFailed(evidence: Evidence, signal?: AbortSignal): string {
+  if (signal?.aborted) return 'aborted'
+  if (evidence.timedOut) return 'timed out'
+  if (evidence.stalled) return 'stalled (no output)'
+  const text = evidence.output.trim()
+  return `exit ${evidence.exitCode === null ? 'none' : evidence.exitCode}${text ? `: ${text.length > 300 ? `${text.slice(0, 300)}…` : text}` : ''}`
+}
+
+/** The step's evidence with what the repair requests spent added: time, tokens and money. */
+function addEvidence(work: Evidence, extra: Evidence[]): Evidence {
+  const all = [work, ...extra]
+  const sum = (pick: (e: Evidence) => number | undefined): number | undefined => {
+    const values = all.map(pick).filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+    return values.length ? values.reduce((a, b) => a + b, 0) : undefined
+  }
+  const usage: Usage = { ...(work.usage ?? {}) }
+  for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'contextTokens', 'totalTokens', 'calls', 'costUsd'] as const) {
+    const value = sum((e) => e.usage?.[key])
+    if (value !== undefined) usage[key] = value
+  }
+  // A share of the subscription is a reading, not an amount: the latest one stands.
+  const limitPct = [...all].reverse().find((e) => e.usage?.limitPct !== undefined)?.usage?.limitPct
+  if (limitPct !== undefined) usage.limitPct = limitPct
+  const costUsd = sum((e) => e.costUsd)
+  return {
+    ...work,
+    durationMs: sum((e) => e.durationMs) ?? work.durationMs,
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(Object.keys(usage).length ? { usage } : {})
   }
 }
 
@@ -547,7 +757,7 @@ async function runParallel(step: StepSpec, attempt: number, scope: RunScope): Pr
         }
         try {
           onEvent({ type: 'branch_start', stepId: step.id, branch: i, title: branch.title, harness: branch.executor.harness })
-          const result = await runBody({ ...branch, id }, branchCwd, attempt, undefined, scope, i)
+          const result = await runBody({ ...branch, id, output_repair: branch.output_repair ?? step.output_repair }, branchCwd, attempt, undefined, scope, i)
           let patch: string | null = null
           if (worktree) {
             const diff = await worktreePatch(cwd, worktree)

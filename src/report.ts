@@ -68,6 +68,7 @@ function renderStep(step: StepResult, level: number): string[] {
     if (e.stalled) facts.push('stalled')
     if (e.timedOut) facts.push('timed out')
     if (e.costUsd !== undefined) facts.push(`cost ${formatCost(e.costUsd)}`)
+    if (e.sessionId) facts.push(`session ${codeSpan(e.sessionId)}`)
     if (e.usage?.inputTokens !== undefined || e.usage?.totalTokens !== undefined) {
       facts.push(`tokens ${e.usage.inputTokens !== undefined ? `${formatTokens(e.usage.inputTokens)} → ${formatTokens(e.usage.outputTokens ?? 0)}` : formatTokens(e.usage.totalTokens)}`)
     }
@@ -75,6 +76,9 @@ function renderStep(step: StepResult, level: number): string[] {
   if (step.verifiedIn === 'worktree') facts.push('verified in a worktree of HEAD')
   lines.push(facts.join(' · '), '')
   if (step.skipReason) lines.push(`Skipped — when: ${codeSpan(step.skipReason)}`, '')
+  if (step.outputRepairs?.length) {
+    lines.push(`Output repair: ${step.outputRepairs.map((r) => `#${r.repair} ${r.mode === 'resume' ? 'same session' : 'new request'} ${r.status} (${formatMs(r.durationMs)}${r.costUsd !== undefined ? `, ${formatCost(r.costUsd)}` : ''}) — fixing: ${text(r.error)}`).join('; ')}`, '')
+  }
   if (step.outputError) lines.push(`Output contract: ${text(step.outputError)}`, '')
   if (step.error) lines.push(`Error: ${text(step.error)}`, '')
   if (step.priorAttempts?.length) {

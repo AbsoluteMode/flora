@@ -1,7 +1,7 @@
 # Installing flora
 
 flora is an npm package: `@absolutemode/flora`, binary `flora`. There is one way to install it and it is
-the same on Windows, macOS and Linux.
+the same on macOS and Linux. Windows is not supported: npm refuses to install the package there.
 
 ## What you need
 
@@ -10,7 +10,7 @@ the same on Windows, macOS and Linux.
   [nodejs.org](https://nodejs.org); Node 22 and 24 are what CI runs.
 - **npm** comes with Node. Git is not required to install flora — a particular workflow may need it.
 - **The harnesses a workflow uses**, installed and logged in on the same machine: `claude` for `claude-code`
-  steps, `codex` for `codex` steps. `command` steps need nothing; `api` steps need a provider configured in
+  steps, `codex` for `codex` steps, `agy` (on PATH or in `~/.local/bin`) for `antigravity` steps. `command` steps need nothing; `api` steps need a provider configured in
   `~/.flora/providers.yaml`. flora never installs or logs into a harness for you.
 
 ## Install

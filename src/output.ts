@@ -1,5 +1,5 @@
 import Ajv, { type ValidateFunction } from 'ajv'
-import type { OutputSpec } from './types'
+import type { OutputIssue, OutputSpec } from './types'
 
 /** Larger than this and a step's output is a file, not a value. */
 export const OUTPUT_LIMIT_BYTES = 256 * 1024
@@ -8,11 +8,31 @@ export const OUTPUT_LIMIT_BYTES = 256 * 1024
 export const OUTPUT_INSTRUCTION =
   'When you are done, finish your answer with exactly one ```json code block containing the result and nothing after it.'
 
-export type OutputResult = { ok: true; value: unknown } | { ok: false; error: string }
+export type OutputResult =
+  | { ok: true; value: unknown }
+  | {
+      ok: false
+      error: string
+      /** The same problem per place in the value (schema errors), or one entry for the whole answer. */
+      issues: OutputIssue[]
+      /** A form problem an agent can fix by answering again (not JSON, no block, schema) — not a size overrun. */
+      repairable: boolean
+    }
 
+// WHY: docs/decisions/2026-11-15-output-repair.md
+/**
+ * Appended to an agent's prompt when the step expects JSON back: the block
+ * instruction and, when the contract has one, the schema itself — the agent
+ * cannot meet a contract it never saw.
+ */
 export function withOutputInstruction(prompt: string, output?: OutputSpec): string {
   if ((output?.type ?? 'text') !== 'json') return prompt
-  return `${prompt.trimEnd()}\n\n${OUTPUT_INSTRUCTION}`
+  const schema = output?.schema ? `\n${schemaInstruction(output.schema)}` : ''
+  return `${prompt.trimEnd()}\n\n${OUTPUT_INSTRUCTION}${schema}`
+}
+
+function schemaInstruction(schema: Record<string, unknown>): string {
+  return `The JSON value must match this JSON Schema, including the type of every field:\n\`\`\`json schema\n${JSON.stringify(schema, null, 2)}\n\`\`\``
 }
 
 /**
@@ -25,7 +45,7 @@ export function readOutput(raw: string, spec: OutputSpec | undefined, harness: s
 
   if ((spec.type ?? 'text') === 'text') {
     const tooBig = overLimit(raw)
-    return tooBig ? { ok: false, error: tooBig } : { ok: true, value: raw }
+    return tooBig ? failure(tooBig, false) : { ok: true, value: raw }
   }
 
   // A command's whole stdout is the document. An agent's transcript is prose
@@ -37,7 +57,7 @@ export function readOutput(raw: string, spec: OutputSpec | undefined, harness: s
   let lastError = ''
   for (const text of candidates) {
     const tooBig = overLimit(text)
-    if (tooBig) return { ok: false, error: tooBig }
+    if (tooBig) return failure(tooBig, false)
     try {
       parsed = JSON.parse(text)
       found = true
@@ -47,24 +67,81 @@ export function readOutput(raw: string, spec: OutputSpec | undefined, harness: s
     }
   }
   if (!found) {
-    return {
-      ok: false,
-      error: candidates.length
-        ? `output is not valid JSON: ${lastError}`
-        : 'no JSON block found in the output (expected a ```json fenced block)'
-    }
+    return failure(
+      !raw.trim()
+        ? 'the output is empty (expected a ```json fenced block)'
+        : candidates.length
+          ? `output is not valid JSON: ${lastError}`
+          : 'no JSON block found in the output (expected a ```json fenced block)',
+      true
+    )
   }
 
   if (spec.schema) {
     const validate = compile(spec.schema)
     if (!validate(parsed)) {
-      const detail = (validate.errors ?? [])
-        .map((e) => `${e.instancePath || '/'} ${e.message ?? 'invalid'}`)
-        .join('; ')
-      return { ok: false, error: `output does not match the schema: ${detail}` }
+      const issues = (validate.errors ?? []).map((e) => ({ path: e.instancePath || '/', message: e.message ?? 'invalid' }))
+      const detail = issues.map((i) => `${i.path} ${i.message}`).join('; ')
+      return { ok: false, error: `output does not match the schema: ${detail}`, issues, repairable: true }
     }
   }
   return { ok: true, value: parsed }
+}
+
+function failure(error: string, repairable: boolean): OutputResult {
+  return { ok: false, error, issues: [{ path: '', message: error }], repairable }
+}
+
+/** How much of an invalid answer a fresh repair request quotes back. */
+export const REPAIR_QUOTE_BYTES = 32 * 1024
+
+export interface RepairRequest {
+  /** `resume`: the message continues the agent's own session; `fresh`: a new request that quotes the answer. */
+  mode: 'resume' | 'fresh'
+  issues: OutputIssue[]
+  output?: OutputSpec
+  /** The invalid answer — quoted only in a fresh request, where the agent has not seen it. */
+  previous?: string
+}
+
+/**
+ * The message an agent gets when its answer broke the output contract: what
+ * is wrong (path and reason, as the validator said it), the schema, and the
+ * request to return the same result in the required form — not to redo the
+ * work. Repair is a change of form, so the agent is told to leave files alone.
+ */
+export function repairPrompt(request: RepairRequest): string {
+  const lines: string[] = []
+  if (request.mode === 'resume') {
+    lines.push('Your final answer did not match the output format this step requires, so flora could not accept it.')
+  } else {
+    lines.push(
+      'An agent finished a task, but its final answer (quoted below) does not match the output format the task requires.',
+      'You are only converting the form of that answer.'
+    )
+  }
+  lines.push('', 'What is wrong (JSON pointer: problem):')
+  for (const issue of request.issues) lines.push(`- ${issue.path ? `${issue.path}: ` : ''}${issue.message}`)
+  lines.push('')
+  if (request.output?.schema) lines.push(schemaInstruction(request.output.schema), '')
+  if (request.mode === 'fresh') {
+    lines.push('The answer to convert:', '<<<', quote(request.previous ?? ''), '>>>', '')
+  }
+  lines.push(
+    'Do not redo the work, do not change files and do not run commands; return the same result in the required form.',
+    'Keep the content; change only its shape (types, structure, field names) to fit the contract.',
+    OUTPUT_INSTRUCTION
+  )
+  return lines.join('\n')
+}
+
+function quote(text: string): string {
+  if (!text.trim()) return '(empty)'
+  const bytes = Buffer.byteLength(text, 'utf8')
+  if (bytes <= REPAIR_QUOTE_BYTES) return text
+  // The block an agent writes is at the end of its answer: keep the tail.
+  const tail = Buffer.from(text, 'utf8').subarray(bytes - REPAIR_QUOTE_BYTES).toString('utf8')
+  return `[… ${bytes - REPAIR_QUOTE_BYTES} bytes earlier omitted]\n${tail}`
 }
 
 function overLimit(text: string): string | null {

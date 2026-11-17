@@ -34,8 +34,8 @@ The remaining runtime support modules (`cli`, `paths`, `types`, `version`, `warn
 Only Codex and Claude are in scope; Antigravity is excluded by user instruction.
 
 - Native app discovery found Claude running in its Code tab and the OpenAI.Codex application branded ChatGPT. No test prompts or settings changes were sent through either GUI.
-- The user offered to execute the real GUI checks. An isolated local test project is prepared at `E:\work projects\flora-gui-check`, with project-scoped MCP configuration, four validated workflow fixtures and exact per-client prompts. Its journal is isolated under `.state`.
-- The user executed the tests in the real GUI applications. Read-only SQLite and filesystem readback independently confirmed the following runs, all with `harness: external`, cwd `E:\work projects\flora-gui-check`, unchanged workflow files and executor exitCode 0:
+- The user offered to execute the real GUI checks. An isolated local test project is prepared at `<test project directory>`, with project-scoped MCP configuration, four validated workflow fixtures and exact per-client prompts. Its journal is isolated under `.state`.
+- The user executed the tests in the real GUI applications. Read-only SQLite and filesystem readback independently confirmed the following runs, all with `harness: external`, cwd `<test project directory>`, unchanged workflow files and executor exitCode 0:
 
 | GUI | Positive run (`passed`, file exists) | Negative run (`failed`, file missing) |
 | --- | --- | --- |

@@ -9,6 +9,22 @@ export interface WorkflowSpec {
   steps: StepSpec[]
   /** Triggers for `flora watch`: a schedule and/or polled event sources. */
   on?: TriggerSpec
+  /** Default output repair for every agent step that does not set its own. */
+  output_repair?: OutputRepairSpec
+}
+
+/**
+ * Output repair: when an agent's answer breaks the step's JSON output
+ * contract (not JSON, no block, empty, or not matching the schema), flora
+ * asks the same agent — in the same session when the harness can resume
+ * it — to return the same result in the required form, read-only, instead
+ * of failing the step at once.
+ */
+export interface OutputRepairSpec {
+  /** How many repair requests before the step fails (default 2). 0 turns repair off. */
+  attempts?: number
+  /** Wall-clock ceiling of one repair request in minutes (default 5, capped by executor.timeout_min). 0: only the executor's limit applies. */
+  timeout_min?: number
 }
 
 export interface TriggerSpec {
@@ -70,6 +86,8 @@ export interface StepSpec {
   /** Output contract: what the step must hand to the steps after it. */
   output?: OutputSpec
   on_fail?: { retry?: number }
+  /** Output repair for this step (a parallel step: for its branches); overrides the workflow's. */
+  output_repair?: OutputRepairSpec
   /** Tools mounted into the harness for this step — nothing beyond this list. */
   tools?: ToolSpec[]
 }
@@ -94,6 +112,8 @@ export interface BranchSpec {
   run?: string
   verify?: CheckSpec[]
   output?: OutputSpec
+  /** Output repair for this branch; overrides the parallel step's and the workflow's. */
+  output_repair?: OutputRepairSpec
   tools?: ToolSpec[]
 }
 
@@ -114,7 +134,7 @@ export interface OutputSpec {
 }
 
 export interface ExecutorSpec {
-  /** Which adapter executes this step: claude-code | codex | harmonia | command | api. */
+  /** Which adapter executes this step: claude-code | codex | antigravity | harmonia | command | api. */
   harness: string
   model?: string
   /** `api` harness: the provider's name in ~/.flora/providers.yaml — where the request goes and which env var holds the key. */
@@ -133,6 +153,10 @@ export interface ExecutorSpec {
   stall_min?: number
   /** Extra CLI args passed through to the harness. */
   args?: string[]
+  /** `antigravity` harness: reasoning level, appended to the model id (`gemini-4-carbon` + `high` → `gemini-4-carbon-high`). */
+  reasoning?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** `antigravity` harness: `read` (default) may only read the run directory; `write` may edit it. */
+  access?: 'read' | 'write'
 }
 
 export interface CheckSpec {
@@ -183,6 +207,44 @@ export interface Evidence {
   stalled?: boolean
   /** Killed at the timeout_min wall-clock limit. */
   timedOut?: boolean
+  /** The harness's own conversation/session id, when it reports one (Claude Code, Codex, Antigravity) — to resume or look it up there. */
+  sessionId?: string
+}
+
+/** One problem the output contract found: a JSON pointer into the value (`/changes`; empty for the whole answer) and what is wrong there. */
+export interface OutputIssue {
+  path: string
+  message: string
+}
+
+/**
+ * One output repair request of a step attempt, as journaled on the step.
+ * Its time, tokens and money are already folded into the step's `evidence`;
+ * these are the per-request figures.
+ */
+export interface OutputRepair {
+  /** 1-based number of the repair within this step attempt. */
+  repair: number
+  /** `resume`: the agent's own session was continued; `fresh`: a new short request with the invalid answer quoted. */
+  mode: 'resume' | 'fresh'
+  /** What was wrong with the answer this request had to fix, as one line. */
+  error: string
+  /** The same, per problem. */
+  errors: OutputIssue[]
+  status: 'passed' | 'failed'
+  durationMs: number
+  exitCode: number | null
+  /** Why the answer to this request still did not pass (or why the request itself failed). */
+  resultError?: string
+  costUsd?: number
+  usage?: Usage
+  sessionId?: string
+  stalled?: boolean
+  timedOut?: boolean
+  /** The message flora sent. */
+  prompt?: string
+  /** The agent's answer (capped). */
+  output?: string
 }
 
 export interface CheckResult {
@@ -232,6 +294,8 @@ export interface StepResult {
   command?: string
   /** Files the step declared in its output (`artifacts: [...]`), copied into the run's artifact directory. */
   artifacts?: StepArtifact[]
+  /** Output repair requests of this attempt, oldest first — only when the first answer broke the output contract. */
+  outputRepairs?: OutputRepair[]
 }
 
 export interface StepArtifact {
@@ -278,6 +342,8 @@ export interface RunEvent {
     | 'step_skipped'
     | 'branch_start'
     | 'branch_result'
+    | 'output_repair_start'
+    | 'output_repair_result'
     | 'run_end'
   [key: string]: unknown
 }

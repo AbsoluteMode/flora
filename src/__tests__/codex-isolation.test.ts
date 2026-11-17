@@ -9,7 +9,7 @@ it('disables effective personal servers and mounts contract servers under fresh 
   const script = join(dir, 'fixture.mjs')
   writeFileSync(script, `import fs from 'node:fs';
 const args=process.argv.slice(2);
-if(args[0]==='mcp') console.log(JSON.stringify([{name:'personal.server',enabled:true}]));
+if(args[0]==='mcp') console.log(JSON.stringify([{name:'personal.server',enabled:true,transport:{type:'stdio',command:'node'}}]));
 else {fs.writeFileSync(process.env.FLORA_ARGV,JSON.stringify(args));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'ok'}}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));}`)
   if (process.platform === 'win32') writeFileSync(join(dir, 'codex.cmd'), '@echo off\r\nnode "%~dp0\\fixture.mjs" %*\r\n')
   else { writeFileSync(join(dir, 'codex'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`); chmodSync(join(dir, 'codex'), 0o755) }
@@ -18,7 +18,8 @@ else {fs.writeFileSync(process.env.FLORA_ARGV,JSON.stringify(args));console.log(
     expect(result.exitCode).toBe(0)
     expect(result.output).toBe('ok')
     const args = JSON.parse(readFileSync(join(dir, 'args.json'), 'utf8')) as string[]
-    expect(args).toContain('mcp_servers={"personal.server"={enabled=false}}')
+    // With its own transport: a bare {enabled=false} is invalid for a server that comes from a plugin.
+    expect(args).toContain('mcp_servers={"personal.server"={command="node",enabled=false}}')
     expect(args.some((a) => /^mcp_servers\.flora_[a-f0-9]{32}_personal=/.test(a))).toBe(true)
     expect(args.slice(-2)).toEqual(['--', '--help'])
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }

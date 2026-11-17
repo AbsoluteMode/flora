@@ -1,6 +1,7 @@
 // Best-effort: bin/flora.mjs is what actually guarantees the filter is in
 // place before `node:sqlite` loads; this covers direct `tsx src/cli.ts` use.
 import './warnings'
+import { constants as osConstants } from 'node:os'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
 import { runWorkflow } from './engine'
@@ -80,6 +81,18 @@ function renderEvent(event: RunEvent): void {
           : red(`  ├ branch ${event.branch} failed`)
       )
       break
+    case 'output_repair_start':
+      console.log(
+        dim(`  ↻ output repair ${event.repair}/${event.maxRepairs}${event.branch !== undefined ? ` (branch ${event.branch})` : ''} · ${event.mode === 'resume' ? 'same session' : 'new request'} · ${event.error}`)
+      )
+      break
+    case 'output_repair_result':
+      console.log(
+        event.status === 'passed'
+          ? dim(`  ↻ output repaired (${event.durationMs}ms)`)
+          : dim(`  ↻ output repair ${event.repair} did not fix it${event.error ? `: ${event.error}` : ''}`)
+      )
+      break
     case 'run_end':
       console.log(
         `\n${event.status === 'passed' ? green(`✓ run passed`) : red(`✗ run ${event.status}`)}` +
@@ -118,7 +131,7 @@ async function commandRun(positional: string[], flags: Map<string, string[]>): P
   const cwd = resolve(flags.get('cwd')?.[0] ?? process.cwd())
 
   const abort = new AbortController()
-  process.on('SIGINT', () => abort.abort())
+  onStopSignal(() => abort.abort())
 
   // The recorder mirrors the engine's events into the journal so `flora serve`
   // can follow this run from another process. The engine itself stays unaware
@@ -436,7 +449,7 @@ async function startViewer(flags: Map<string, string[]>): Promise<RunningServer>
     throw new WorkflowError(`--port expects a port number, got "${flags.get('port')?.[0]}"`)
   }
   const running = await startServer({ port })
-  process.on('SIGINT', () => {
+  onStopSignal(() => {
     void running.close().then(() => process.exit(0))
   })
   return running
@@ -543,10 +556,10 @@ async function commandWatch(positional: string[], flags: Map<string, string[]>):
 
   watcher.start()
   console.error(`${bold('flora watch')} ${dim('·')} ${watcher.workflows.length} workflow(s) armed · ctrl-c to stop`)
-  process.on('SIGINT', () => {
+  onStopSignal(() => {
     console.error(dim('[flora watch] stopping — waiting for runs in flight'))
     void watcher.stop().then(() => process.exit(0))
-  })
+  }, { graceMs: 0 })
 }
 
 /**
@@ -597,23 +610,63 @@ Usage:
                                  run a workflow before every git push; a failed run blocks it
 
 A workflow is a YAML contract: steps, each with an executor
-(claude-code | codex | harmonia | command | api) and verification checks.
+(claude-code | codex | antigravity | harmonia | command | api) and verification checks.
 The verifier runs checks itself — a step passes only when they do.`)
+}
+
+/** Commands that own work in flight: losing the terminal must not end them. */
+const LONG_RUNNING = new Set(['run', 'watch', 'serve', 'open'])
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
+/** How long a stop may take before flora leaves anyway (a stuck cleanup must not make it unkillable). */
+const STOP_GRACE_MS = 10_000
+
+// WHY: docs/decisions/2026-11-16-stop-signals-and-closed-output.md
+/**
+ * One stop path for every way a supervisor ends a process. Only ctrl-c used to
+ * be handled: `kill`, launchd, a closed terminal (SIGTERM, SIGHUP) took flora
+ * down at once, while the step it had started lived on in its own process group
+ * and the journal kept saying `running`.
+ *
+ * The first signal starts the orderly stop. A second one, or `graceMs` without
+ * the process ending, exits with the conventional 128 + signal number — pass
+ * `graceMs: 0` where waiting is the point (`watch` lets runs in flight finish).
+ */
+function onStopSignal(stop: () => void, { graceMs = STOP_GRACE_MS }: { graceMs?: number } = {}): void {
+  let stopping = false
+  for (const name of STOP_SIGNALS) {
+    process.on(name, () => {
+      const code = 128 + (osConstants.signals[name] ?? 0)
+      if (stopping) process.exit(code)
+      stopping = true
+      if (graceMs > 0) setTimeout(() => process.exit(code), graceMs).unref()
+      stop()
+    })
+  }
 }
 
 /**
  * `flora runs --json | head` closes our stdout early; without this the process
  * dies on an unhandled EPIPE and prints a stack trace over the user's pipeline.
+ * For a listing, exiting quietly is right: nobody is reading.
+ *
+ * A long-running command is different — the reader going away (a supervisor
+ * restarted, a terminal closed) says nothing about the work. Exiting 0 there
+ * reported success for a run that had not finished and abandoned its step, so
+ * these commands go on without output; stderr gets the same treatment because
+ * nothing handled its EPIPE at all.
  */
-function tolerateClosedStdout(): void {
-  process.stdout.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EPIPE') process.exit(0)
-    throw err
-  })
+function tolerateClosedOutput(command: string | undefined): void {
+  const keepRunning = command !== undefined && LONG_RUNNING.has(command)
+  const handle = (err: NodeJS.ErrnoException): void => {
+    if (err.code !== 'EPIPE') throw err
+    if (!keepRunning) process.exit(0)
+  }
+  process.stdout.on('error', handle)
+  if (keepRunning) process.stderr.on('error', handle)
 }
 
 async function main(): Promise<void> {
-  tolerateClosedStdout()
+  tolerateClosedOutput(process.argv[2])
   if (process.argv.includes('--version') || process.argv[2] === 'version') {
     console.log(version())
     return

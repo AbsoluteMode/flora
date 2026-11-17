@@ -5,26 +5,28 @@ import { referencesSteps, substituteContext, type RunContext } from './context'
 import { parseCron } from './cron'
 import { schemaErrors } from './contract'
 import { assertOutputSchema } from './output'
+import { ANTIGRAVITY_REASONING, ownedAntigravityFlag } from './adapters/antigravity'
 
 export class WorkflowError extends Error {}
 
-const KNOWN_HARNESSES = new Set(['claude-code', 'codex', 'harmonia', 'command', 'api'])
+const KNOWN_HARNESSES = new Set(['claude-code', 'codex', 'antigravity', 'harmonia', 'command', 'api'])
 
 // The code validator and schema/workflow.schema.json enforce the same rules;
 // a test corpus keeps them in step. Unknown fields are refused rather than
 // ignored — a silently skipped `verfy:` is a contract that never verifies.
-const ROOT_KEYS = new Set(['name', 'version', 'description', 'params', 'steps', 'on'])
+const ROOT_KEYS = new Set(['name', 'version', 'description', 'params', 'steps', 'on', 'output_repair'])
 const ON_KEYS = new Set(['cron', 'sentry', 'command'])
 const SENTRY_KEYS = new Set(['org', 'project', 'query', 'match', 'interval_sec', 'url'])
 const COMMAND_SOURCE_KEYS = new Set(['run', 'interval_sec', 'timeout_min'])
 const PARAM_KEYS = new Set(['required', 'default', 'description'])
-const STEP_KEYS = new Set(['id', 'title', 'needs', 'when', 'executor', 'parallel', 'prompt', 'run', 'verify', 'verify_in', 'output', 'on_fail', 'tools'])
-const BRANCH_KEYS = new Set(['title', 'executor', 'prompt', 'run', 'verify', 'output', 'tools'])
+const STEP_KEYS = new Set(['id', 'title', 'needs', 'when', 'executor', 'parallel', 'prompt', 'run', 'verify', 'verify_in', 'output', 'on_fail', 'output_repair', 'tools'])
+const BRANCH_KEYS = new Set(['title', 'executor', 'prompt', 'run', 'verify', 'output', 'output_repair', 'tools'])
 const PARALLEL_KEYS = new Set(['require', 'isolation', 'branches'])
-const EXECUTOR_KEYS = new Set(['harness', 'model', 'timeout_min', 'stall_min', 'args', 'provider', 'temperature', 'max_tokens'])
+const EXECUTOR_KEYS = new Set(['harness', 'model', 'timeout_min', 'stall_min', 'args', 'provider', 'temperature', 'max_tokens', 'reasoning', 'access'])
 const CHECK_KEYS = new Set(['type', 'run', 'expect_exit', 'expect_match', 'path', 'contains'])
 const OUTPUT_KEYS = new Set(['type', 'schema'])
 const ON_FAIL_KEYS = new Set(['retry'])
+const OUTPUT_REPAIR_KEYS = new Set(['attempts', 'timeout_min'])
 const MCP_TOOL_KEYS = new Set(['name', 'command', 'args', 'env'])
 /** Harnesses with an MCP client; the others get a clear refusal, not a silently dropped contract. */
 const TOOL_HARNESSES = new Set(['claude-code', 'codex'])
@@ -79,6 +81,7 @@ export function validateWorkflow(spec: WorkflowSpec): void {
     }
   }
   if (spec.on !== undefined) validateTriggers(spec.on)
+  if (spec.output_repair !== undefined) validateOutputRepair('workflow', spec.output_repair)
   if (!Array.isArray(spec.steps) || spec.steps.length === 0) {
     throw new WorkflowError('workflow.steps must be a non-empty list')
   }
@@ -123,6 +126,8 @@ export function validateWorkflow(spec: WorkflowSpec): void {
         throw new WorkflowError(`${where}: on_fail.retry must be an integer >= 0`)
       }
     }
+    // On a parallel step it is the branches' default; on a plain step validateBody checks it.
+    if (step.parallel !== undefined && step.output_repair !== undefined) validateOutputRepair(where, step.output_repair)
 
     const hasExecutor = step.executor !== undefined
     const hasParallel = step.parallel !== undefined
@@ -184,6 +189,21 @@ function validateBody(where: string, body: BranchSpec): void {
       if (body.executor[key] !== undefined) throw new WorkflowError(`${where}: executor.${key} only applies to the api harness`)
     }
   }
+  // Antigravity: what the agent may touch and how hard it thinks are contract fields, not free-form args.
+  if (harness !== 'antigravity') {
+    for (const key of ['reasoning', 'access'] as const) {
+      if (body.executor[key] !== undefined) throw new WorkflowError(`${where}: executor.${key} only applies to the antigravity harness`)
+    }
+  } else {
+    if (body.executor.reasoning !== undefined && !(ANTIGRAVITY_REASONING as readonly unknown[]).includes(body.executor.reasoning)) {
+      throw new WorkflowError(`${where}: executor.reasoning must be one of ${ANTIGRAVITY_REASONING.join(', ')}`)
+    }
+    if (body.executor.access !== undefined && body.executor.access !== 'read' && body.executor.access !== 'write') {
+      throw new WorkflowError(`${where}: executor.access must be read or write`)
+    }
+    const owned = ownedAntigravityFlag(body.executor.args)
+    if (owned) throw new WorkflowError(`${where}: executor.args cannot set ${owned} — use executor.access/model/reasoning; flora owns that flag`)
+  }
   if (body.executor.temperature !== undefined && !(typeof body.executor.temperature === 'number' && body.executor.temperature >= 0 && body.executor.temperature <= 2)) {
     throw new WorkflowError(`${where}: executor.temperature must be a number between 0 and 2`)
   }
@@ -222,6 +242,12 @@ function validateBody(where: string, body: BranchSpec): void {
       catch (err) { throw new WorkflowError(`${where}: invalid output.schema: ${(err as Error).message}`) }
     }
   }
+  if (body.output_repair !== undefined) {
+    validateOutputRepair(where, body.output_repair)
+    // Repair asks an agent to answer again; a shell command cannot be asked, and a contract without json has nothing to repair.
+    if (harness === 'command') throw new WorkflowError(`${where}: output_repair only applies to agent harnesses — a command cannot be asked to fix its output`)
+    if ((body.output?.type ?? 'text') !== 'json') throw new WorkflowError(`${where}: output_repair needs output.type: json`)
+  }
   if (body.verify !== undefined && !Array.isArray(body.verify)) {
     throw new WorkflowError(`${where}: verify must be a list of checks`)
   }
@@ -241,6 +267,19 @@ function validateBody(where: string, body: BranchSpec): void {
         `${where}: {{steps.*}} and {{event.*}} are not allowed in a check's "run" — read $FLORA_CONTEXT instead`
       )
     }
+  }
+}
+
+/** `output_repair: { attempts, timeout_min }` — at the root, on a step or on a branch. */
+function validateOutputRepair(where: string, value: unknown): void {
+  if (!isMapping(value)) throw new WorkflowError(`${where}: output_repair must be a mapping with attempts/timeout_min`)
+  rejectUnknown(`${where}: output_repair`, value, OUTPUT_REPAIR_KEYS)
+  if (value.attempts !== undefined && !(Number.isInteger(value.attempts) && (value.attempts as number) >= 0)) {
+    throw new WorkflowError(`${where}: output_repair.attempts must be an integer >= 0 (0 turns repair off)`)
+  }
+  const timeout = value.timeout_min
+  if (timeout !== undefined && !(typeof timeout === 'number' && Number.isFinite(timeout) && timeout >= 0)) {
+    throw new WorkflowError(`${where}: output_repair.timeout_min must be a number of minutes >= 0`)
   }
 }
 

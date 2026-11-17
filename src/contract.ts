@@ -54,7 +54,9 @@ function toContractError(error: ErrorObject): ContractError {
   else if (error.keyword === 'not') {
     message = error.instancePath.endsWith('/name')
       ? 'is a reserved name'
-      : 'must not reference {{steps.*}} or {{event.*}} here — read $FLORA_CONTEXT instead'
+      : error.instancePath.endsWith('/executor')
+        ? 'reasoning and access only apply to the antigravity harness'
+        : 'must not reference {{steps.*}} or {{event.*}} here — read $FLORA_CONTEXT instead'
   }
   return { path, message }
 }
@@ -80,7 +82,7 @@ export function describeContract(): string {
   }
 
   section('workflow', workflowSchema)
-  for (const name of ['step', 'parallel', 'branch', 'executor', 'check', 'output', 'param', 'tool', 'trigger', 'sentry_source', 'command_source']) {
+  for (const name of ['step', 'parallel', 'branch', 'executor', 'check', 'output', 'output_repair', 'param', 'tool', 'trigger', 'sentry_source', 'command_source']) {
     if (definitions[name]) section(name, definitions[name])
   }
   lines.push('* = required. Placeholders: {{params.name}} (or {{name}}) anywhere; {{workflow_dir}} = the folder the workflow file is in (its scripts and prompts travel with it — see flora pack); {{steps.<id>.output…}} in prompt, contains and expect_match only.')

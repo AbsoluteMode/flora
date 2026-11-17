@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { runCommand } from './adapters/command'
+import { AGY_NOT_INSTALLED, findAgy, parseAntigravityModels } from './adapters/antigravity'
 import { loadProviders } from './providers'
 import { floraVersion, isCheckout, PACKAGE_ROOT } from './version'
 import type { Evidence } from './types'
@@ -116,6 +117,26 @@ export function interpretCodex(version: Evidence, status: Evidence, env: NodeJS.
 }
 
 /**
+ * Antigravity is optional: absent is a dot, not a ✗. Present, it is ready only
+ * when `agy models` answers with at least one model — that call loads the
+ * account and lists what it may use without running a model.
+ */
+export function interpretAntigravity(path: string | null, version: Evidence, models: Evidence): Probe {
+  if (!path || notFound(version)) {
+    return { name: 'antigravity', ok: null, detail: 'not installed (optional)', hint: 'looked on PATH and in ~/.local/bin' }
+  }
+  if (version.exitCode !== 0) return { name: 'antigravity', ok: false, detail: `cannot start: ${firstLine(version.output)}` }
+  const v = firstLine(version.output)
+  const ids = models.exitCode === 0 ? parseAntigravityModels(models.output) : []
+  if (!ids.length) {
+    const why = models.exitCode === 0 ? 'lists no models' : `failed: ${firstLine(models.output.replace(/^Fetching available models\.\.\.\s*/i, '')) || `exit ${models.exitCode}`}`
+    return { name: 'antigravity', ok: false, detail: `${v} · \`agy models\` ${why}`, hint: 'run `agy` once and sign in, then `agy models` should list the Gemini models' }
+  }
+  const carbon = ids.filter((id) => id.startsWith('gemini-4-carbon')).length
+  return { name: 'antigravity', ok: true, detail: `${v} · ${ids.length} models${carbon ? ` (${carbon} Gemini 4 Carbon)` : ''} · ${path}` }
+}
+
+/**
  * harmonia is optional, so nothing about it is a problem: absent is a dot, and
  * a harmonia that starts its session instead of answering `--version` (the
  * ones before the flag existed) is present but unversioned — a dot as well,
@@ -142,6 +163,11 @@ export async function doctor(env: NodeJS.ProcessEnv = process.env): Promise<Prob
   const codexVersion = await probe('codex', ['--version'])
   const codexStatus = notFound(codexVersion) ? codexVersion : await probe('codex', ['login', 'status'])
   results.push(interpretCodex(codexVersion, codexStatus, env))
+
+  const agy = findAgy(env)
+  const agyVersion = agy ? await probe(agy, ['--version']) : { output: '', exitCode: null, durationMs: 0 }
+  const agyModels = agy && agyVersion.exitCode === 0 ? await probe(agy, ['models']) : agyVersion
+  results.push(interpretAntigravity(agy, agyVersion, agyModels))
 
   results.push(interpretHarmonia(await probe('harmonia', ['--version'], SHORT_PROBE)))
 
@@ -197,6 +223,7 @@ export function explainFailure(harness: string, evidence: Evidence): string | un
     }
     if (/not logged in|unauthorized|401/i.test(out)) return 'codex is not logged in — run `codex login` or set OPENAI_API_KEY'
   }
+  if (harness === 'antigravity' && (out.startsWith(AGY_NOT_INSTALLED) || out.startsWith('antigravity: '))) return firstLine(out)
   if (harness === 'claude-code') {
     if (/not logged in|authentication_failed/i.test(out)) {
       return 'Claude Code is not logged in on this machine — run `claude` and /login, or set ANTHROPIC_API_KEY; `flora doctor` shows the state'

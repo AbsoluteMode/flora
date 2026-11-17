@@ -98,8 +98,10 @@ export function summarizeRun(record: RunRecord): Record<string, unknown> {
       attempt: step.attempt,
       harness: step.harness,
       exitCode: step.evidence?.exitCode,
+      ...(step.evidence?.sessionId ? { sessionId: step.evidence.sessionId } : {}),
       ...(step.output !== undefined ? { output: step.output } : {}),
       ...(step.outputError ? { outputError: step.outputError } : {}),
+      ...(step.outputRepairs?.length ? { outputRepairs: step.outputRepairs.map((r) => ({ repair: r.repair, mode: r.mode, status: r.status, error: r.error, ...(r.resultError ? { resultError: r.resultError } : {}) })) } : {}),
       checks: step.checks.map((check) => ({ passed: check.passed, detail: check.detail }))
     }))
   }

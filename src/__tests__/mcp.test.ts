@@ -64,7 +64,7 @@ describe('contract schema and code validator agree', () => {
     for (const field of ['name*', 'steps*', 'executor*', 'harness*', 'verify', 'output', 'on_fail', 'stall_min', 'expect_match', 'contains']) {
       expect(text).toContain(field)
     }
-    expect(text).toContain('claude-code | codex | harmonia | command')
+    expect(text).toContain('claude-code | codex | antigravity | harmonia | command')
   })
 })
 

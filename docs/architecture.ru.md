@@ -13,12 +13,30 @@
 
 - **Workflow** — именованный YAML-контракт: шаги, исполнители, верификация (`examples/*.yaml`).
 - **Step** — единица работы: `executor` (какой харнесс, какая модель) + `prompt`/`run` + `verify` (чеки) + `on_fail` (ретраи).
-- **Executor / adapter** — способ запуска харнесса headless: `claude-code` (`claude -p`), `codex` (`codex exec`), `harmonia` (`harmonia run`), `command` (любая shell-команда). Адаптер нормализует вывод в **Evidence** `{output, exitCode, durationMs, costUsd?}`.
+- **Executor / adapter** — способ запуска харнесса headless: `claude-code` (`claude -p`), `codex` (`codex exec`), `antigravity` (`agy --print`), `harmonia` (`harmonia run`), `command` (любая shell-команда). Адаптер нормализует вывод в **Evidence** `{output, exitCode, durationMs, costUsd?, sessionId?}`; `sessionId` — id разговора в самом харнессе (пока его сообщает только Antigravity).
+- **Antigravity** (`src/adapters/antigravity.ts`). Бинарь `agy` ищется в PATH, затем в `~/.local/bin`. Перед
+  шагом `agy models` (как `codex mcp list` у Codex — из того же бюджета `timeout_min`) уточняет модель:
+  `executor.model` (по умолчанию `gemini-4-carbon`) + `executor.reasoning` (по умолчанию `medium`) → id
+  `gemini-4-carbon-high`; полный id берётся как есть; id, которого нет в списке, — отказ до начала работы.
+  Запуск: `agy --output-format stream-json --disable-slash-commands --model <id> --sandbox [--mode auto]
+  --settings <json> --print <prompt>` в каталоге прогона. `executor.access`: `read` (по умолчанию) — без
+  `--mode`, в настройках запрещены `command(*)`, `unsandboxed(*)`, `write_file(*)`, `read_url(*)`,
+  `execute_url(*)`, `download_url(*)`, `mcp(*)`; `write` — `--mode auto`, `agentMode: auto`, команды в
+  терминальной песочнице, запрещён только `mcp(*)`. В обоих `toolPermission: request-review`,
+  `allowNonWorkspaceAccess: false`. `--mode plan` для чтения не годится: в print-режиме agy сам одобряет свой
+  план и может начать править. `--dangerously-skip-permissions` не передаётся никогда, а `executor.args`, которые
+  трогают флаги адаптера (`--mode`, `--settings`, `--model`, `--print`, …), отклоняет валидатор. Поток
+  `stream-json` (agy 1.5.9): `{"event":"init","conversation_id",…,"init":{"model"}}`, `{"event":"step_update",…}`,
+  `{"event":"result","result":{"status":"SUCCESS","response","usage"}}`. Ответ — `result.response`, статус не
+  SUCCESS или поток без `result` — провал, `conversation_id` → `Evidence.sessionId` (`agy --conversation <id>`
+  продолжает разговор). Если `init.model` не совпал с заказанным, шаг падает: модель контракта не подменяется
+  молча. Результат шаг отдаёт текстом/JSON-блоком, как Codex; MCP Флоре не нужен, поэтому все MCP-серверы agy
+  выключены, а `tools` у antigravity-шага валидатор не принимает.
 - **Runner reliability** (`adapters/command.ts`, база всех адаптеров). У шага два таймера, и они ловят разные
   болезни: `timeout_min` (дефолт 15) — потолок по wall-clock для разбежавшейся работы; `stall_min` (дефолт 5) —
   тишина в stdout/stderr, сбрасывается каждым чанком — для зависаний (API не отвечает, харнесс ждёт ответа).
   `0` отключает любой из них. Класс «ждёт stdin» исключён конструкцией: дети спавнятся с закрытым stdin, вопрос
-  в headless-режиме получает EOF. По срабатыванию (или abort по ctrl-c) убивается **всё дерево процессов**
+  в headless-режиме получает EOF. По срабатыванию (или при остановке сигналом SIGINT, SIGTERM, SIGHUP) убивается **всё дерево процессов**
   (POSIX: своя process group + `kill(-pid)`; Windows: `taskkill /T /F`), evidence получает `stalled: true` /
   `timedOut: true`, ненулевой `exitCode` и пометку в хвосте вывода; дальше — обычный `on_fail.retry`.
   CPU-активность сигналом не считается: ожидание API — это легитимные 0 %.
@@ -30,7 +48,8 @@
   (`inputTokens / outputTokens / cachedTokens / contextTokens / totalTokens / limitPct`, всё опционально):
   claude-code — из `usage` финального кадра `stream-json` (адаптер переведён на stream-json именно ради
   stall-детекта: события льются постоянно, таймер меряет живую активность, а не редкие байты); codex —
-  из `usage` события `turn.completed` (`codex exec --json`, по той же причине); harmonia и всё остальное —
+  из `usage` события `turn.completed` (`codex exec --json`, по той же причине); antigravity — из `usage` кадра
+  `result` (`cache_read_tokens` у agy вне `input_tokens`, как у Anthropic); harmonia и всё остальное —
   через универсальный парсер `adapters/usage.ts` (JSON-объекты usage в диалектах OpenAI / Anthropic / Gemini,
   либо текстовый футер `tokens used: N`, `input=… output=…`, `42% of … limit`). Семантика кэша нормализована:
   у Anthropic cache-read вне `input_tokens`, у OpenAI/Gemini — внутри; `contextTokens` всегда «сколько ушло
@@ -58,10 +77,32 @@
 
 - **Контракт выхода** — `output: { type: json | text, schema? }`. `json`: у `command`-шага парсится весь вывод
   (если в него подмешался stderr — берётся последний JSON-блок); у агентных адаптер дошивает к промпту просьбу
-  закончить ответ одним блоком ```json, движок берёт последний валидный. `schema` — JSON Schema, проверяется
-  `ajv`. Невалидный output (парс / схема / больше 256 КБ) = шаг **failed**; причина — в `StepResult.outputError`,
-  значение — в `StepResult.output` и в журнале. Шаг без `output:` работает как раньше.
-- **Retry с фидбеком** — если упал именно контракт и есть `on_fail.retry`, в промпт следующей попытки дошивается
+  закончить ответ одним блоком ```json и, если есть `schema`, саму схему (с 0.6.2 — до этого агент её не
+  видел); движок берёт последний валидный блок. `schema` — JSON Schema, проверяется `ajv`. Невалидный output
+  у агента сначала уходит на исправление формы (ниже); не исправился, больше 256 КБ или это `command`-шаг —
+  шаг **failed**; причина — в `StepResult.outputError`, значение — в `StepResult.output` и в журнале. Шаг без
+  `output:` работает как раньше.
+- **Исправление формы** (`output_repair: { attempts, timeout_min }`, с 0.6.2) — агент закончил работу (exit 0),
+  а ответ не прошёл контракт (не JSON, нет блока, пусто, не по схеме): движок не роняет шаг, а просит того же
+  агента вернуть **тот же результат в нужной форме** — с ошибками как есть (JSON pointer и причина), схемой и
+  «do not redo the work, do not change files». `resume` — в ту же сессию: claude-code `--resume <session_id>`,
+  codex `exec … resume <thread_id>`, antigravity `--conversation <conversation_id>` (id адаптеры кладут в
+  `Evidence.sessionId`). `fresh` — если адаптер сессию не продолжает (harmonia, api), id неизвестен или
+  продолжить не вышло: один новый короткий запрос с цитатой ответа (хвост до 32 КБ). Repair всегда без
+  инструментов и только на чтение: claude — без MCP и с `--disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit`,
+  codex — `--sandbox read-only` (флаги песочницы и `--full-auto` из `executor.args` выкидываются), antigravity —
+  read-настройки. `attempts` (по умолчанию 2, `0` — выключено; `fresh` — один раз) задаётся в корне workflow,
+  на шаге, на parallel-шаге (для веток) и на ветке; на `command`-шаге и без `output.type: json` валидатор её
+  не принимает. У каждого запроса свой wall-clock `timeout_min` (по умолчанию 5, но не больше
+  `executor.timeout_min`), `stall_min` — шага; таймаут или отмена прогона прекращают исправления. Журнал:
+  события `output_repair_start` (`stepId`, `attempt`, `repair`, `maxRepairs`, `mode`, `sessionId?`, `error`,
+  `errors[{path,message}]`, `branch?`) и `output_repair_result` (`stepId`, `attempt`, `repair`, `mode`,
+  `status`, `durationMs`, `exitCode`, `error?`, `errors?`, `costUsd?`, `usage?`, `branch?`); на шаге —
+  `StepResult.outputRepairs[]`. Время, токены и деньги исправлений прибавлены к `evidence` шага (`flora usage`
+  их видит), `evidence.output` — ответ работы. Исчерпали — `outputError` = последняя причина +
+  `(output repair: N requests did not fix it)`, дальше обычный `on_fail.retry`. Типы флора сама не приводит:
+  схема — контракт автора. Почему так — `docs/decisions/2026-11-15-output-repair.md`.
+- **Retry с фидбеком** — если упал именно контракт (и исправления формы не помогли) и есть `on_fail.retry`, в промпт следующей попытки дошивается
   `Previous attempt failed the output contract: <ошибка>. Return valid output.` (только агентным исполнителям).
 - **Контекст прогона** — `params.*` + `steps.<id>.output` (у шага без контракта — его stdout).
   Подстановки `{{steps.fetch.output.items[0].id}}` работают в `prompt`, `contains`, `expect_match`; резолвер
@@ -208,8 +249,9 @@ tools:
 - **Монтирование — родным способом харнесса** (`src/tools.ts` собирает список серверов, адаптер превращает
   его во флаги). claude-code: `--mcp-config <файл прогона> --strict-mcp-config --allowedTools mcp__<name>,…` —
   только серверы контракта, не пользовательский `~/.claude.json`, и все их тулы предодобрены (в `-p` спросить
-  некого). codex: `-c 'mcp_servers.<name>={command="…",args=[…],env={…}}'` на каждый сервер. harmonia и
-  `command` — валидатор отказывает явно: MCP-клиента там нет.
+  некого). codex: `-c 'mcp_servers.<name>={command="…",args=[…],env={…}}'` на каждый сервер. antigravity,
+  harmonia и `command` — валидатор отказывает явно: у agy нет способа подключить сервер только на один запуск,
+  не трогая его общий конфиг, а у остальных MCP-клиента нет.
 - **flora-native тулы — тот же `flora mcp` по stdio**, без портов: харнесс сам запускает
   `node bin/flora.mjs mcp --context <context.json> --cwd … --run <runId> --depth N --stack … --allow-workflow …`.
   `read_context(path)` читает контекст шага (`steps.fetch.output.items[0].id`); `call_workflow(workflow, params,
@@ -244,7 +286,7 @@ src/
   types.ts        — все контракты типов (начинай чтение отсюда)
   workflow.ts     — парс/валидация YAML, подстановка {{params}} / {{steps.*}}
   context.ts      — контекст прогона и резолвер путей для подстановок
-  output.ts       — контракт выхода: извлечение JSON, лимит, ajv-схема
+  output.ts       — контракт выхода: извлечение JSON, лимит, ajv-схема, сообщение для исправления формы
   contract.ts     — JSON Schema контракта: ошибки с путями, describe_contract
   tools.ts        — tools: MCP-серверы для шага (внешние + flora mcp --context)
   cron.ts         — свой cron-парсер и nextCron
@@ -257,7 +299,7 @@ schema/           — workflow.schema.json — контракт для реда�
   engine.ts       — цикл прогона (v0: последовательный, ретраи, abort)
   verifier.ts     — прогон чеков
   state.ts        — журнал прогонов (node:sqlite)
-  adapters/       — command (база) + claude-code, codex, harmonia
+  adapters/       — command (база) + claude-code, codex, antigravity, harmonia
   recorder.ts     — события → журнал (коалесинг вывода, подрезка хвоста, live-запись прогона)
   cli.ts          — команды flora run / runs / usage / pack / inspect / add / workflows / serve
   usage.ts        — учёт токенов и денег по шагам прогона (попытки, ветки, итог) и таблица для CLI
@@ -287,6 +329,11 @@ web/              — фронт вьювера: голый HTML + ES-модул
   уже не придёт. Такой прогон — `interrupted`: CLI (`flora run`, `flora runs`) помечает его в журнале
   (`sweepInterrupted`: статус, `finishedAt` = последний сигнал, шаг «в работе» → failed с пояснением), вьювер
   показывает то же самое на чтении, ничего не записывая (`effectiveStatus`).
+- **Остановка** (с 0.6.3, `docs/decisions/2026-11-16-stop-signals-and-closed-output.md`). SIGINT, SIGTERM и SIGHUP
+  останавливают `flora run` одинаково: дерево шага убито, в журнале итог `error`, код выхода 1. Повторный сигнал или
+  10 с без завершения — выход с кодом 128 + номер сигнала. Если читатель вывода исчез (закрытый терминал,
+  перезапущенный супервизор), `run`, `watch`, `serve` и `open` продолжают работу без вывода, и код выхода отражает
+  настоящий итог прогона.
 
 ## Исполнитель `api` и провайдеры
 
@@ -362,7 +409,9 @@ web/              — фронт вьювера: голый HTML + ES-модул
 
 - **`flora doctor`** (`src/doctor.ts`) — строка на зависимость и харнесс: node ≥ 22.5, git (для worktree),
   claude-code (`claude --version` + `claude auth status` — JSON с `loggedIn`), codex (`codex --version` +
-  `codex login status` — грузит конфиг и первым делом сообщает ошибку в нём, с файлом и строкой), harmonia,
+  `codex login status` — грузит конфиг и первым делом сообщает ошибку в нём, с файлом и строкой), antigravity
+  (опционален: `agy --version` + `agy models` — готов, только если список моделей не пуст; бинарь ищется и в
+  `~/.local/bin`), harmonia,
   журнал. Все пробы бесплатные — модель не вызывается. Токен из окружения (`ANTHROPIC_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN`+`ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`) засчитывается как готовность. Выход 1, если
   что-то обязательное сломано.
@@ -402,7 +451,7 @@ npm run flora -- run examples/hello.yaml --cwd /tmp
 - **#8** — авторинг агентом: `flora mcp` + JSON Schema контракта.
 - **#9** — параллельные ветки + коллектор.
 - **#27–#29** — граф шагов (`needs`/`when`/`skipped`), изоляция чеков (`verify_in: worktree`), pre-push гейт.
-- Плюс `flora doctor`, e2e-стенд на живых агентах (`examples/e2e/`), CI на Linux/macOS/Windows,
+- Плюс `flora doctor`, e2e-стенд на живых агентах (`examples/e2e/`), CI на Linux и macOS (Windows не поддерживается с 0.6.1),
   устанавливаемый пакет.
 
 Дальше — баги и апдейты по запросу. Из известного и не сделанного: чеки `llm-judge` и `human` (гейт с

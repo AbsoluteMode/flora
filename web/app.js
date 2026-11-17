@@ -705,6 +705,7 @@ function stepItem(step, index) {
       running ? null : fact('Exit', evidence.exitCode === null || evidence.exitCode === undefined ? 'none' : String(evidence.exitCode)),
       evidence.costUsd !== undefined ? fact('Cost', `$${Number(evidence.costUsd).toFixed(4)}`) : null,
       fact('Tokens', describeUsage(evidence.usage)),
+      evidence.sessionId ? fact('Session', evidence.sessionId) : null,
       evidence.usage?.limitPct !== undefined ? fact('Limit', `${evidence.usage.limitPct}%`) : null,
       branches ? fact('Branches', `${branchesPassed}/${branches.length} passed`) : null,
       step.verifiedIn === 'worktree' ? fact('Verified in', 'a worktree of HEAD') : null,

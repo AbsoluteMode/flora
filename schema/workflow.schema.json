@@ -32,7 +32,8 @@
       "description": "Executed in order. A step runs only after the previous one passed its verification.",
       "items": { "$ref": "#/definitions/step" }
     },
-    "on": { "$ref": "#/definitions/trigger" }
+    "on": { "$ref": "#/definitions/trigger" },
+    "output_repair": { "$ref": "#/definitions/output_repair" }
   },
   "definitions": {
     "trigger": {
@@ -110,7 +111,7 @@
         "parallel": { "$ref": "#/definitions/parallel" },
         "prompt": {
           "type": "string",
-          "description": "Task text for a harness executor (claude-code, codex, harmonia). Placeholders: `{{params.*}}`, `{{steps.<id>.output…}}`."
+          "description": "Task text for a harness executor (claude-code, codex, antigravity, harmonia). Placeholders: `{{params.*}}`, `{{steps.<id>.output…}}`."
         },
         "run": {
           "type": "string",
@@ -135,6 +136,7 @@
             "retry": { "type": "integer", "minimum": 0, "description": "Extra attempts after a failure. A retry after a broken output contract tells the agent what was wrong." }
           }
         },
+        "output_repair": { "$ref": "#/definitions/output_repair" },
         "tools": {
           "type": "array",
           "description": "Tools mounted into the harness for this step, and nothing beyond them: external MCP servers plus the flora-native `read_context` and `call_workflow`. Only claude-code and codex can mount tools.",
@@ -174,6 +176,16 @@
         {
           "if": { "required": ["tools"] },
           "then": { "properties": { "executor": { "properties": { "harness": { "enum": ["claude-code", "codex"] } } } } }
+        },
+        {
+          "if": { "required": ["output_repair", "executor"] },
+          "then": {
+            "required": ["output"],
+            "properties": {
+              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "harmonia", "api"] } } },
+              "output": { "required": ["type"], "properties": { "type": { "const": "json" } } }
+            }
+          }
         }
       ]
     },
@@ -212,6 +224,7 @@
         "run": { "type": "string", "not": { "pattern": "\\{\\{\\s*(steps|event)\\b" } },
         "verify": { "type": "array", "items": { "$ref": "#/definitions/check" } },
         "output": { "$ref": "#/definitions/output" },
+        "output_repair": { "$ref": "#/definitions/output_repair" },
         "tools": { "type": "array", "items": { "$ref": "#/definitions/tool" } }
       },
       "allOf": [
@@ -223,6 +236,16 @@
         {
           "if": { "required": ["tools"] },
           "then": { "properties": { "executor": { "properties": { "harness": { "enum": ["claude-code", "codex"] } } } } }
+        },
+        {
+          "if": { "required": ["output_repair"] },
+          "then": {
+            "required": ["output"],
+            "properties": {
+              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "harmonia", "api"] } } },
+              "output": { "required": ["type"], "properties": { "type": { "const": "json" } } }
+            }
+          }
         }
       ]
     },
@@ -273,13 +296,15 @@
       "properties": {
         "harness": {
           "type": "string",
-          "enum": ["claude-code", "codex", "harmonia", "command", "api"],
-          "description": "Which adapter executes the step: `claude-code` (claude -p), `codex` (codex exec), `harmonia` (harmonia run), `command` (a shell command) or `api` (one prompt → one completion from a model API named by `provider` and configured in ~/.flora/providers.yaml — never a default)."
+          "enum": ["claude-code", "codex", "antigravity", "harmonia", "command", "api"],
+          "description": "Which adapter executes the step: `claude-code` (claude -p), `codex` (codex exec), `antigravity` (agy --print, Gemini models), `harmonia` (harmonia run), `command` (a shell command) or `api` (one prompt → one completion from a model API named by `provider` and configured in ~/.flora/providers.yaml — never a default)."
         },
         "model": { "type": "string", "description": "Model passed through to the harness." },
         "provider": { "type": "string", "description": "`api` harness: the provider's name in ~/.flora/providers.yaml (where the request goes, which environment variable holds the key)." },
         "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "`api` harness: sampling temperature." },
         "max_tokens": { "type": "integer", "minimum": 1, "description": "`api` harness: completion length cap." },
+        "reasoning": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "`antigravity` harness: reasoning level, appended to the model id (`gemini-4-carbon` + `high` → `gemini-4-carbon-high`). Default `medium` when the model is a family." },
+        "access": { "type": "string", "enum": ["read", "write"], "description": "`antigravity` harness: `read` (default) — the agent may only read the run directory: no commands, file writes, network or MCP; `write` — it may edit the workspace, commands run in the terminal sandbox." },
         "timeout_min": {
           "type": "number",
           "minimum": 0,
@@ -295,7 +320,9 @@
           "items": { "type": "string" },
           "description": "Extra CLI arguments passed through to the harness."
         }
-      }
+      },
+      "if": { "properties": { "harness": { "not": { "const": "antigravity" } } } },
+      "then": { "not": { "anyOf": [{ "required": ["reasoning"] }, { "required": ["access"] }] } }
     },
     "check": {
       "type": "object",
@@ -341,6 +368,15 @@
       },
       "if": { "required": ["schema"] },
       "then": { "properties": { "type": { "const": "json" } }, "required": ["type"] }
+    },
+    "output_repair": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Output repair: when an agent's answer breaks the JSON output contract (not JSON, no block, empty, or not matching the schema), flora asks the same agent — in its own session when the harness can resume it (claude-code, codex, antigravity), otherwise once with a new short request — to return the same result in the required form, read-only, before failing the step. At the workflow root it is the default for every agent step; on a parallel step, for its branches. Agent harnesses with `output.type: json` only.",
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 0, "description": "Repair requests per step attempt before the step fails (default 2). 0 turns repair off: a broken contract fails the step at once." },
+        "timeout_min": { "type": "number", "minimum": 0, "description": "Wall-clock ceiling of one repair request in minutes (default 5), never longer than the step's executor.timeout_min. 0 leaves only the executor's limit." }
+      }
     }
   }
 }

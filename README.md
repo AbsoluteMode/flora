@@ -18,7 +18,7 @@ flora requires Node 22.5 or newer. Download the npm tarball from the
 — see [Installing flora](docs/installation.md):
 
 ```bash
-npm install -g ./absolutemode-flora-0.5.1.tgz
+npm install -g ./absolutemode-flora-0.6.3.tgz
 flora doctor                         # which harnesses are installed and logged in, and what to fix
 ```
 
@@ -48,8 +48,8 @@ flora pack hello.yaml                # one file to hand to a colleague: flora ru
 ```
 
 Every release carries the same package as a file: download `absolutemode-flora-<version>.tgz` from the release and
-run `npm install -g ./absolutemode-flora-<version>.tgz` — the way in while the repository is private or a machine
-has no registry access.
+run `npm install -g ./absolutemode-flora-<version>.tgz` — the way in for a machine
+without registry access.
 
 Working from a checkout: `npm ci`, then `npm run flora -- …` in place of `flora …`. `flora doctor` says so
 out loud, because a checkout runs whatever its working tree currently holds.
@@ -81,12 +81,43 @@ steps:
 flora run review-then-fix.yaml --param task="fix the flaky retry in queue.ts"
 ```
 
-Executors: `claude-code` (`claude -p --output-format stream-json`), `codex` (`codex exec --json`), `harmonia` (`harmonia run`), `command` (any shell command). Checks: `command` (exit code / output match) and `artifact` (file exists / contains) — `llm-judge` and `human` gates are on the roadmap.
+Executors: `claude-code` (`claude -p --output-format stream-json`), `codex` (`codex exec --json`), `antigravity` (`agy --print --output-format stream-json`, Gemini models), `harmonia` (`harmonia run`), `command` (any shell command). Checks: `command` (exit code / output match) and `artifact` (file exists / contains) — `llm-judge` and `human` gates are on the roadmap.
+
+An **Antigravity** step (Google's `agy` CLI) names the model family and a reasoning level, which become the agy
+model id, and says whether it may edit the run directory:
+
+```yaml
+  - id: review
+    executor: { harness: antigravity, model: gemini-4-carbon, reasoning: high, access: read }
+    prompt: Review the uncommitted changes and report a JSON verdict.
+  - id: fix
+    executor: { harness: antigravity, model: gemini-4-carbon, reasoning: medium, access: write }
+    prompt: Fix the defect the review found.
+```
+
+`model` defaults to `gemini-4-carbon`, `reasoning` to `medium` (`gemini-4-carbon` + `high` → `gemini-4-carbon-high`;
+a full id such as `gemini-4-carbon-low` is taken as is), and the id must be one `agy models` lists — otherwise the
+step fails before any work. `access: read` (the default) runs `agy --sandbox` with commands, file writes, the
+network and MCP denied; `access: write` adds `--mode auto`, edits stay inside the workspace and commands run in the
+terminal sandbox. flora never passes `--dangerously-skip-permissions`, and refuses `executor.args` that set the
+flags it owns (`--mode`, `--settings`, `--model`, …). The step's conversation id is journaled as its session
+(`agy --conversation <id>` resumes it). Antigravity steps cannot mount `tools` yet.
 
 Steps pass **data**, not just files. Declare `output: { type: json, schema: {…} }` and the value is parsed, validated and
 journaled; later steps read it as `{{steps.fetch.output.items[0].id}}` in prompts and check expectations, and shell
 steps read the whole context from the JSON file at `$FLORA_CONTEXT` (step outputs are never interpolated into shell
 lines — see `examples/data-pipeline.yaml`).
+
+An agent sees the schema in its prompt, and when its answer still breaks the contract — not JSON, no block, empty,
+or a field of the wrong type — flora does not fail the step at once: it goes back to the **same agent, in the same
+session** (`claude -p --resume`, `codex exec … resume`, `agy --conversation`), read-only and without tools, with the
+validation errors as they are (path and reason) and the schema, and asks for the same result in the required form —
+not for the work again. A harness that cannot resume a session (harmonia, api) gets one fresh request quoting the
+answer. `output_repair: { attempts: 2, timeout_min: 5 }` (the defaults) can be set for the whole workflow, a step or a
+branch; `attempts: 0` turns it off. Each request has its own time limit (never above the step's `timeout_min`), its
+time, tokens and money count towards the step, and the journal records it as `output_repair_start` /
+`output_repair_result` events and `outputRepairs` on the step. flora never coerces types itself — the schema is the
+author's contract; declare `anyOf` if either form is fine.
 
 A step can also mount **tools** — `tools: [{ mcp: {…} }, { flora: call_workflow, workflow: ./review.yaml }, { flora: read_context }]` —
 and the harness gets exactly those MCP servers and nothing else; `call_workflow` runs another contract as a nested
@@ -138,6 +169,8 @@ language server — the examples start with `# yaml-language-server: $schema=…
   With `verify_in: worktree` the checks run in a fresh worktree of HEAD, so only what the executor committed can pass.
 - **Engine** — walks the workflow, persists every run to a local journal (`~/.flora/flora.db`). A run whose flora
   process died (killed, crashed, machine off) is marked `interrupted` instead of showing as running forever.
+  `flora run` stops cleanly on SIGINT, SIGTERM and SIGHUP — the step's process tree is killed and the run is journaled —
+  and keeps going to its real result when whatever was reading its output goes away.
 - **Step inspector** — click a pipeline node or **Inspect** to compare input, task and output, inspect saved calls and retries, search JSON/JSONL records, and read files and independent checks. It also works with imported `.flora-run` files. [Recording inspectable evidence](docs/step-inspection.md).
 - **Viewer** — `flora serve` reads that journal and renders it at `127.0.0.1:4180`: every run, its
   steps, the evidence each executor left, and the verifier's verdict per check.
@@ -193,7 +226,7 @@ filter        ingest         100 → 80  12m03s     3    1,200      $1.25    1.2
 
 - **The pipeline** — the workflow file (and its `.flora` bundle): steps, the graph, parameters, checks, output
   contracts, retries, and for every step where it runs — a local harness you are logged into (`claude-code`,
-  `codex`, `harmonia`), a script (`command`), or a model API configured separately and named explicitly.
+  `codex`, `antigravity`, `harmonia`), a script (`command`), or a model API configured separately and named explicitly.
 - **The artefact** — what one run went through: every step with the prompt as sent or the command as run,
   the checks and their verdicts, the contract output, the executor transcript, tokens and money, metrics and
   the data flow, retries, and the files a step declares as its artifacts (`"artifacts": ["calls.jsonl",
@@ -246,5 +279,5 @@ See `examples/e2e/README.md` for the environment; the set costs well under a dol
 `v0.3.0` — one way to install (the npm package) and one kind of executor (a CLI on this machine): the standalone
 installers and the hand-off of a step to a GUI agent through MCP are gone. The v0.2.1 hardening stays — see the
 [audit and verification report](docs/audits/2026-09-05-quality-security.md). CI verifies tests, types and a tarball
-install on Windows, macOS and Linux. Live model execution still requires a logged-in local harness. Known gaps:
+install on macOS and Linux. Windows is not supported. Live model execution still requires a logged-in local harness. Known gaps:
 `llm-judge` and `human` check types. MIT.

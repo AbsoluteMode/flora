@@ -33,7 +33,14 @@ function stepSchema(depth: number): z.ZodType {
     priorAttempts: z.array(z.object({ attempt: finite.int().nonnegative(), status: stepStatus, evidence: evidence.partial().optional() }).passthrough()).optional(),
     inputsFrom: z.array(z.string()).optional(), metrics: z.record(z.string(), finite).optional(),
     outputBytes: finite.int().nonnegative().optional(), prompt: z.string().optional(), command: z.string().optional(),
-    artifacts: z.array(z.object({ path: pathCheck(validateRelativePath), source: z.string(), bytes: finite.int().nonnegative() }).passthrough()).optional()
+    artifacts: z.array(z.object({ path: pathCheck(validateRelativePath), source: z.string(), bytes: finite.int().nonnegative() }).passthrough()).optional(),
+    outputRepairs: z.array(z.object({
+      repair: finite.int().positive(), mode: z.enum(['resume', 'fresh']), error: z.string(),
+      errors: z.array(z.object({ path: z.string(), message: z.string() }).passthrough()),
+      status: z.enum(['passed', 'failed']), durationMs: finite, exitCode: finite.int().nullable(),
+      resultError: z.string().optional(), costUsd: finite.optional(), usage: usage.optional(), sessionId: z.string().optional(),
+      stalled: z.boolean().optional(), timedOut: z.boolean().optional(), prompt: z.string().optional(), output: z.string().optional()
+    }).passthrough()).optional()
   }).passthrough()
 }
 

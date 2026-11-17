@@ -162,6 +162,19 @@ export function createRecorder(store: RunStore, context: RecorderContext): Recor
         case 'branch_result':
           append('branch_result', { stepId: event.stepId, branch: event.branch, status: event.status, patch: event.patch })
           return
+        case 'output_repair_start':
+          append('output_repair_start', {
+            stepId: event.stepId, attempt: event.attempt, repair: event.repair, maxRepairs: event.maxRepairs,
+            mode: event.mode, sessionId: event.sessionId, error: event.error, errors: event.errors, branch: event.branch
+          })
+          return
+        case 'output_repair_result':
+          append('output_repair_result', {
+            stepId: event.stepId, attempt: event.attempt, repair: event.repair, mode: event.mode, status: event.status,
+            durationMs: event.durationMs, exitCode: event.exitCode, error: event.error, errors: event.errors,
+            costUsd: event.costUsd, usage: event.usage, branch: event.branch
+          })
+          return
         case 'check_result':
           // The engine does not carry the CheckSpec on this event, so the live
           // view shows pass/fail plus detail; the full contract arrives with

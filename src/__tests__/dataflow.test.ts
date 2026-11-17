@@ -225,6 +225,8 @@ describe('engine data flow', () => {
           executor: { harness: 'claude-code' },
           prompt: 'Answer with {{task}}',
           output: { type: 'json', schema: { type: 'object', required: ['answer'] } },
+          // Repair off: this is the whole-step retry path (output repair has its own tests).
+          output_repair: { attempts: 0 },
           on_fail: { retry: 1 }
         }
       ], { task: { default: 'a number' } }),

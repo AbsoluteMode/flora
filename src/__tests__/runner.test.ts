@@ -161,7 +161,9 @@ describe('usage parsing', () => {
       isError: false,
       costUsd: 0.0412,
       // Anthropic counts cache reads outside input_tokens: context = 1200 + 8000 + 500.
-      usage: { inputTokens: 1200, outputTokens: 340, cachedTokens: 8000, contextTokens: 9700, totalTokens: 10040 }
+      usage: { inputTokens: 1200, outputTokens: 340, cachedTokens: 8000, contextTokens: 9700, totalTokens: 10040 },
+      // The conversation, for an output repair to continue (`--resume s1`).
+      sessionId: 's1'
     })
   })
 
