@@ -2,12 +2,12 @@
 
 **Local-first workflow contracts for AI coding harnesses.**
 
-Coding harnesses (Claude Code, Codex, harmonia, …) are interactive tools. flora turns any of them into a **callable unit with a contract**: input (a step with a verification contract) → execution → output (evidence, judged by an independent verifier). In short: *it gives your harness an API.*
+Coding harnesses (Claude Code, Codex, Antigravity, …) are interactive tools. flora turns any of them into a **callable unit with a contract**: input (a step with a verification contract) → execution → output (evidence, judged by an independent verifier). In short: *it gives your harness an API.*
 
 A workflow is a named, versioned YAML contract: which steps, executed by which harness with which model, and — the core idea — **what proves each step is actually done**. The verifier runs the checks itself; the executor never grades its own homework. The next step is not released until the current contract is closed.
 
 Everything runs on your machine: your harnesses, your repos. The agents are the local harnesses you are
-already logged into (Claude Code, Codex, harmonia — ours, not public yet; flora runs fine without it); an
+already logged into (Claude Code, Codex, Antigravity); an
 API provider is never the default — a workflow that
 wants one configures it explicitly. No cloud in the critical path.
 
@@ -81,7 +81,7 @@ steps:
 flora run review-then-fix.yaml --param task="fix the flaky retry in queue.ts"
 ```
 
-Executors: `claude-code` (`claude -p --output-format stream-json`), `codex` (`codex exec --json`), `antigravity` (`agy --print --output-format stream-json`, Gemini models), `harmonia` (`harmonia run`), `command` (any shell command). Checks: `command` (exit code / output match) and `artifact` (file exists / contains) — `llm-judge` and `human` gates are on the roadmap.
+Executors: `claude-code` (`claude -p --output-format stream-json`), `codex` (`codex exec --json`), `antigravity` (`agy --print --output-format stream-json`, Gemini models), `command` (any shell command). Checks: `command` (exit code / output match) and `artifact` (file exists / contains) — `llm-judge` and `human` gates are on the roadmap.
 
 An **Antigravity** step (Google's `agy` CLI) names the model family and a reasoning level, which become the agy
 model id, and says whether it may edit the run directory:
@@ -112,7 +112,7 @@ An agent sees the schema in its prompt, and when its answer still breaks the con
 or a field of the wrong type — flora does not fail the step at once: it goes back to the **same agent, in the same
 session** (`claude -p --resume`, `codex exec … resume`, `agy --conversation`), read-only and without tools, with the
 validation errors as they are (path and reason) and the schema, and asks for the same result in the required form —
-not for the work again. A harness that cannot resume a session (harmonia, api) gets one fresh request quoting the
+not for the work again. A harness that cannot resume a session (api) gets one fresh request quoting the
 answer. `output_repair: { attempts: 2, timeout_min: 5 }` (the defaults) can be set for the whole workflow, a step or a
 branch; `attempts: 0` turns it off. Each request has its own time limit (never above the step's `timeout_min`), its
 time, tokens and money count towards the step, and the journal records it as `output_repair_start` /
@@ -174,7 +174,7 @@ language server — the examples start with `# yaml-language-server: $schema=…
 - **Step inspector** — click a pipeline node or **Inspect** to compare input, task and output, inspect saved calls and retries, search JSON/JSONL records, and read files and independent checks. It also works with imported `.flora-run` files. [Recording inspectable evidence](docs/step-inspection.md).
 - **Viewer** — `flora serve` reads that journal and renders it at `127.0.0.1:4180`: every run, its
   steps, the evidence each executor left, and the verifier's verdict per check.
-- **Usage** — every step's tokens and money land in the journal: Claude Code, Codex and harmonia report
+- **Usage** — every step's tokens and money land in the journal: Claude Code, Codex and Antigravity report
   their own, a `command` step is counted when it prints a JSON line with a `usage` object (`input_tokens`,
   `output_tokens`, `calls`, `cost_usd`) or a `tokens used: … cost: $…` line. `flora usage [run-id]` prints
   the invoice per step with retries and branches included; `--all` gives one line per run; the viewer shows
@@ -226,7 +226,7 @@ filter        ingest         100 → 80  12m03s     3    1,200      $1.25    1.2
 
 - **The pipeline** — the workflow file (and its `.flora` bundle): steps, the graph, parameters, checks, output
   contracts, retries, and for every step where it runs — a local harness you are logged into (`claude-code`,
-  `codex`, `antigravity`, `harmonia`), a script (`command`), or a model API configured separately and named explicitly.
+  `codex`, `antigravity`), a script (`command`), or a model API configured separately and named explicitly.
 - **The artefact** — what one run went through: every step with the prompt as sent or the command as run,
   the checks and their verdicts, the contract output, the executor transcript, tokens and money, metrics and
   the data flow, retries, and the files a step declares as its artifacts (`"artifacts": ["calls.jsonl",
