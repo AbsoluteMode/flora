@@ -9,7 +9,7 @@ import { ANTIGRAVITY_REASONING, ownedAntigravityFlag } from './adapters/antigrav
 
 export class WorkflowError extends Error {}
 
-const KNOWN_HARNESSES = new Set(['claude-code', 'codex', 'antigravity', 'harmonia', 'command', 'api'])
+const KNOWN_HARNESSES = new Set(['claude-code', 'codex', 'antigravity', 'command', 'api'])
 
 // The code validator and schema/workflow.schema.json enforce the same rules;
 // a test corpus keeps them in step. Unknown fields are refused rather than

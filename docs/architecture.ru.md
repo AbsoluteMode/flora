@@ -2,7 +2,7 @@
 
 # Архитектура flora
 
-**Питч:** харнессы (Claude Code, Codex, harmonia) — интерактивные инструменты. flora превращает любой из них в вызываемый юнит с контрактом: вход (шаг + контракт верификации) → исполнение → выход (evidence, проверенный независимым верификатором). Мы даём харнессам API.
+**Питч:** харнессы (Claude Code, Codex, Antigravity) — интерактивные инструменты. flora превращает любой из них в вызываемый юнит с контрактом: вход (шаг + контракт верификации) → исполнение → выход (evidence, проверенный независимым верификатором). Мы даём харнессам API.
 
 **Принципы (не нарушать):**
 1. **Local-first.** Всё исполняется на машине юзера: харнессы, репо, ключи, БД. Никакого облака в критическом пути.
@@ -13,7 +13,7 @@
 
 - **Workflow** — именованный YAML-контракт: шаги, исполнители, верификация (`examples/*.yaml`).
 - **Step** — единица работы: `executor` (какой харнесс, какая модель) + `prompt`/`run` + `verify` (чеки) + `on_fail` (ретраи).
-- **Executor / adapter** — способ запуска харнесса headless: `claude-code` (`claude -p`), `codex` (`codex exec`), `antigravity` (`agy --print`), `harmonia` (`harmonia run`), `command` (любая shell-команда). Адаптер нормализует вывод в **Evidence** `{output, exitCode, durationMs, costUsd?, sessionId?}`; `sessionId` — id разговора в самом харнессе (пока его сообщает только Antigravity).
+- **Executor / adapter** — способ запуска харнесса headless: `claude-code` (`claude -p`), `codex` (`codex exec`), `antigravity` (`agy --print`), `command` (любая shell-команда). Адаптер нормализует вывод в **Evidence** `{output, exitCode, durationMs, costUsd?, sessionId?}`; `sessionId` — id разговора в самом харнессе (пока его сообщает только Antigravity).
 - **Antigravity** (`src/adapters/antigravity.ts`). Бинарь `agy` ищется в PATH, затем в `~/.local/bin`. Перед
   шагом `agy models` (как `codex mcp list` у Codex — из того же бюджета `timeout_min`) уточняет модель:
   `executor.model` (по умолчанию `gemini-4-carbon`) + `executor.reasoning` (по умолчанию `medium`) → id
@@ -49,7 +49,7 @@
   claude-code — из `usage` финального кадра `stream-json` (адаптер переведён на stream-json именно ради
   stall-детекта: события льются постоянно, таймер меряет живую активность, а не редкие байты); codex —
   из `usage` события `turn.completed` (`codex exec --json`, по той же причине); antigravity — из `usage` кадра
-  `result` (`cache_read_tokens` у agy вне `input_tokens`, как у Anthropic); harmonia и всё остальное —
+  `result` (`cache_read_tokens` у agy вне `input_tokens`, как у Anthropic); всё остальное —
   через универсальный парсер `adapters/usage.ts` (JSON-объекты usage в диалектах OpenAI / Anthropic / Gemini,
   либо текстовый футер `tokens used: N`, `input=… output=…`, `42% of … limit`). Семантика кэша нормализована:
   у Anthropic cache-read вне `input_tokens`, у OpenAI/Gemini — внутри; `contextTokens` всегда «сколько ушло
@@ -87,7 +87,7 @@
   агента вернуть **тот же результат в нужной форме** — с ошибками как есть (JSON pointer и причина), схемой и
   «do not redo the work, do not change files». `resume` — в ту же сессию: claude-code `--resume <session_id>`,
   codex `exec … resume <thread_id>`, antigravity `--conversation <conversation_id>` (id адаптеры кладут в
-  `Evidence.sessionId`). `fresh` — если адаптер сессию не продолжает (harmonia, api), id неизвестен или
+  `Evidence.sessionId`). `fresh` — если адаптер сессию не продолжает (api), id неизвестен или
   продолжить не вышло: один новый короткий запрос с цитатой ответа (хвост до 32 КБ). Repair всегда без
   инструментов и только на чтение: claude — без MCP и с `--disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit`,
   codex — `--sandbox read-only` (флаги песочницы и `--full-auto` из `executor.args` выкидываются), antigravity —
@@ -249,9 +249,9 @@ tools:
 - **Монтирование — родным способом харнесса** (`src/tools.ts` собирает список серверов, адаптер превращает
   его во флаги). claude-code: `--mcp-config <файл прогона> --strict-mcp-config --allowedTools mcp__<name>,…` —
   только серверы контракта, не пользовательский `~/.claude.json`, и все их тулы предодобрены (в `-p` спросить
-  некого). codex: `-c 'mcp_servers.<name>={command="…",args=[…],env={…}}'` на каждый сервер. antigravity,
-  harmonia и `command` — валидатор отказывает явно: у agy нет способа подключить сервер только на один запуск,
-  не трогая его общий конфиг, а у остальных MCP-клиента нет.
+  некого). codex: `-c 'mcp_servers.<name>={command="…",args=[…],env={…}}'` на каждый сервер. antigravity
+  и `command` — валидатор отказывает явно: у agy нет способа подключить сервер только на один запуск,
+  не трогая его общий конфиг, а у `command` MCP-клиента нет.
 - **flora-native тулы — тот же `flora mcp` по stdio**, без портов: харнесс сам запускает
   `node bin/flora.mjs mcp --context <context.json> --cwd … --run <runId> --depth N --stack … --allow-workflow …`.
   `read_context(path)` читает контекст шага (`steps.fetch.output.items[0].id`); `call_workflow(workflow, params,
@@ -299,7 +299,7 @@ schema/           — workflow.schema.json — контракт для реда�
   engine.ts       — цикл прогона (v0: последовательный, ретраи, abort)
   verifier.ts     — прогон чеков
   state.ts        — журнал прогонов (node:sqlite)
-  adapters/       — command (база) + claude-code, codex, antigravity, harmonia
+  adapters/       — command (база) + claude-code, codex, antigravity
   recorder.ts     — события → журнал (коалесинг вывода, подрезка хвоста, live-запись прогона)
   cli.ts          — команды flora run / runs / usage / pack / inspect / add / workflows / serve
   usage.ts        — учёт токенов и денег по шагам прогона (попытки, ветки, итог) и таблица для CLI
@@ -390,10 +390,10 @@ web/              — фронт вьювера: голый HTML + ES-модул
 ## Учёт токенов и денег: `flora usage`
 
 - Каждая попытка шага несёт `evidence.usage` (токены) и `evidence.costUsd` (деньги), если харнесс их сообщил.
-  Claude Code (`total_cost_usd` + `usage` в кадре `result`), Codex (`turn.completed`) и harmonia — сами;
+  Claude Code (`total_cost_usd` + `usage` в кадре `result`), Codex (`turn.completed`) и Antigravity — сами;
   `command`-шаг — когда печатает JSON-строку с объектом `usage` (`input_tokens`, `output_tokens`, `calls`,
   `cost_usd`; понимаются и диалекты OpenAI/Anthropic/Gemini) или строку вида `tokens used: 12,345 · cost: $0.42`.
-  Универсальный парсер — `src/adapters/usage.ts`, `attachUsage(evidence)` — общий для command/harmonia/codex.
+  Универсальный парсер — `src/adapters/usage.ts`, `attachUsage(evidence)` — общий для command/codex.
 - Ретрай не бесплатен: движок кладёт в итоговый `StepResult.priorAttempts` лёгкий след каждой неудачной попытки
   (статус, длительность, usage, cost — без вывода). Ветки `parallel`-шага считаются по своим `evidence`.
 - `src/usage.ts` сводит запись прогона в строки по шагам (`attempts`, `calls`, `input`, `output`, `total`, `cost`)
@@ -411,7 +411,7 @@ web/              — фронт вьювера: голый HTML + ES-модул
   claude-code (`claude --version` + `claude auth status` — JSON с `loggedIn`), codex (`codex --version` +
   `codex login status` — грузит конфиг и первым делом сообщает ошибку в нём, с файлом и строкой), antigravity
   (опционален: `agy --version` + `agy models` — готов, только если список моделей не пуст; бинарь ищется и в
-  `~/.local/bin`), harmonia,
+  `~/.local/bin`),
   журнал. Все пробы бесплатные — модель не вызывается. Токен из окружения (`ANTHROPIC_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN`+`ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`) засчитывается как готовность. Выход 1, если
   что-то обязательное сломано.

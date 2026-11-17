@@ -255,7 +255,7 @@ describe('when the session cannot be continued', () => {
     agent.execute.push(answer(LISTS, { sessionId: 'ignored' }), answer(STRINGS))
     const { record, repairEvents } = await run({
       name: 'fallback',
-      steps: [step({ executor: { harness: 'harmonia' }, output_repair: { attempts: 2 } })]
+      steps: [step({ executor: { harness: 'api', provider: 'x' }, output_repair: { attempts: 2 } })]
     })
     expect(record.status).toBe('passed')
     expect(agent.executeCalls).toHaveLength(2)

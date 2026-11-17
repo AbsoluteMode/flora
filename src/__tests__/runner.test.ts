@@ -9,7 +9,6 @@ import { runCommand } from '../adapters/command'
 import { parseClaudeStream } from '../adapters/claude-code'
 import { parseUsage } from '../adapters/usage'
 import { parseCodexStream } from '../adapters/codex'
-import { harmoniaUsage } from '../adapters/harmonia'
 
 let dir: string
 beforeEach(() => {
@@ -234,8 +233,8 @@ describe('usage parsing', () => {
     expect(parseUsage('nothing here')).toBeUndefined()
   })
 
-  it('harmonia: reads a key=value summary line', () => {
-    expect(harmoniaUsage('working…\nsummary: input=1200 output=340 cached=8000 limit=42%')).toEqual({
+  it('reads a key=value summary line', () => {
+    expect(parseUsage('working…\nsummary: input=1200 output=340 cached=8000 limit=42%')).toEqual({
       inputTokens: 1200,
       outputTokens: 340,
       cachedTokens: 8000,

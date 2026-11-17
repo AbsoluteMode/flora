@@ -111,7 +111,7 @@
         "parallel": { "$ref": "#/definitions/parallel" },
         "prompt": {
           "type": "string",
-          "description": "Task text for a harness executor (claude-code, codex, antigravity, harmonia). Placeholders: `{{params.*}}`, `{{steps.<id>.output…}}`."
+          "description": "Task text for a harness executor (claude-code, codex, antigravity). Placeholders: `{{params.*}}`, `{{steps.<id>.output…}}`."
         },
         "run": {
           "type": "string",
@@ -182,7 +182,7 @@
           "then": {
             "required": ["output"],
             "properties": {
-              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "harmonia", "api"] } } },
+              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "api"] } } },
               "output": { "required": ["type"], "properties": { "type": { "const": "json" } } }
             }
           }
@@ -242,7 +242,7 @@
           "then": {
             "required": ["output"],
             "properties": {
-              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "harmonia", "api"] } } },
+              "executor": { "properties": { "harness": { "enum": ["claude-code", "codex", "antigravity", "api"] } } },
               "output": { "required": ["type"], "properties": { "type": { "const": "json" } } }
             }
           }
@@ -296,8 +296,8 @@
       "properties": {
         "harness": {
           "type": "string",
-          "enum": ["claude-code", "codex", "antigravity", "harmonia", "command", "api"],
-          "description": "Which adapter executes the step: `claude-code` (claude -p), `codex` (codex exec), `antigravity` (agy --print, Gemini models), `harmonia` (harmonia run), `command` (a shell command) or `api` (one prompt → one completion from a model API named by `provider` and configured in ~/.flora/providers.yaml — never a default)."
+          "enum": ["claude-code", "codex", "antigravity", "command", "api"],
+          "description": "Which adapter executes the step: `claude-code` (claude -p), `codex` (codex exec), `antigravity` (agy --print, Gemini models), `command` (a shell command) or `api` (one prompt → one completion from a model API named by `provider` and configured in ~/.flora/providers.yaml — never a default)."
         },
         "model": { "type": "string", "description": "Model passed through to the harness." },
         "provider": { "type": "string", "description": "`api` harness: the provider's name in ~/.flora/providers.yaml (where the request goes, which environment variable holds the key)." },

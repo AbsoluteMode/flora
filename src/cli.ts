@@ -363,7 +363,7 @@ function commandUsage(positional: string[], flags: Map<string, string[]>): void 
     if (!usage.total.reported) {
       console.log(
         dim(
-          '\nno step reported usage. Claude Code, Codex and harmonia report it themselves; a command step\n' +
+          '\nno step reported usage. Claude Code, Codex and Antigravity report it themselves; a command step\n' +
             'is counted when it prints a JSON line with a usage object ({"usage":{"input_tokens":…,"output_tokens":…,"calls":…,"cost_usd":…}})\n' +
             'or a summary line such as "tokens used: 12,345 · cost: $0.42".'
         )
@@ -610,7 +610,7 @@ Usage:
                                  run a workflow before every git push; a failed run blocks it
 
 A workflow is a YAML contract: steps, each with an executor
-(claude-code | codex | antigravity | harmonia | command | api) and verification checks.
+(claude-code | codex | antigravity | command | api) and verification checks.
 The verifier runs checks itself — a step passes only when they do.`)
 }
 

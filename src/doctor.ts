@@ -22,9 +22,6 @@ export interface Probe {
 }
 
 const PROBE_LIMITS = { timeoutMin: 0.5, stallMin: 0.5 }
-// A harness that answers a version flag by starting up instead is given a few
-// seconds, not the half minute a status command may need.
-const SHORT_PROBE = { timeoutMin: 0.1, stallMin: 0.1 }
 
 async function probe(command: string, args: string[], limits = PROBE_LIMITS): Promise<Evidence> {
   return runCommand(command, args, { cwd: process.cwd(), ...limits })
@@ -136,20 +133,6 @@ export function interpretAntigravity(path: string | null, version: Evidence, mod
   return { name: 'antigravity', ok: true, detail: `${v} · ${ids.length} models${carbon ? ` (${carbon} Gemini 4 Carbon)` : ''} · ${path}` }
 }
 
-/**
- * harmonia is optional, so nothing about it is a problem: absent is a dot, and
- * a harmonia that starts its session instead of answering `--version` (the
- * ones before the flag existed) is present but unversioned — a dot as well,
- * never a ✗. Only an answer with exit 0 earns the check mark and the version.
- */
-export function interpretHarmonia(version: Evidence): Probe {
-  if (notFound(version)) return { name: 'harmonia', ok: null, detail: 'not installed (optional)' }
-  if (version.exitCode !== 0) {
-    return { name: 'harmonia', ok: null, detail: 'installed · no answer to --version (optional)', hint: 'an older harmonia starts a session instead; update it for the version here' }
-  }
-  return { name: 'harmonia', ok: true, detail: firstLine(version.output) }
-}
-
 // ── the run ────────────────────────────────────────────────────────────────
 
 export async function doctor(env: NodeJS.ProcessEnv = process.env): Promise<Probe[]> {
@@ -168,8 +151,6 @@ export async function doctor(env: NodeJS.ProcessEnv = process.env): Promise<Prob
   const agyVersion = agy ? await probe(agy, ['--version']) : { output: '', exitCode: null, durationMs: 0 }
   const agyModels = agy && agyVersion.exitCode === 0 ? await probe(agy, ['models']) : agyVersion
   results.push(interpretAntigravity(agy, agyVersion, agyModels))
-
-  results.push(interpretHarmonia(await probe('harmonia', ['--version'], SHORT_PROBE)))
 
   // Model API providers are opt-in: listed only when providers.yaml exists.
   const home = env.FLORA_HOME ?? (env.FLORA_DB ? dirname(env.FLORA_DB) : join(homedir(), '.flora'))

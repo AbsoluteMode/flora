@@ -134,7 +134,7 @@ export interface OutputSpec {
 }
 
 export interface ExecutorSpec {
-  /** Which adapter executes this step: claude-code | codex | antigravity | harmonia | command | api. */
+  /** Which adapter executes this step: claude-code | codex | antigravity | command | api. */
   harness: string
   model?: string
   /** `api` harness: the provider's name in ~/.flora/providers.yaml — where the request goes and which env var holds the key. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { explainFailure, formatProbes, interpretClaude, interpretCodex, interpretGit, interpretHarmonia, interpretInstall, interpretNode } from '../doctor'
+import { explainFailure, formatProbes, interpretClaude, interpretCodex, interpretGit, interpretInstall, interpretNode } from '../doctor'
 import type { Evidence } from '../types'
 
 const ev = (output: string, exitCode: number | null = 0): Evidence => ({ output, exitCode, durationMs: 1 })
@@ -57,24 +57,16 @@ describe('doctor interpreters', () => {
     expect(interpretCodex(missing, missing, {})).toMatchObject({ ok: false, detail: 'not installed' })
   })
 
-  it('harmonia: optional, so never a problem — absent, unversioned, or versioned', () => {
-    expect(interpretHarmonia(ev('[spawn error: spawn harmonia ENOENT]', null))).toMatchObject({ ok: null, detail: 'not installed (optional)' })
-    // An older harmonia starts its session on --version and the probe stalls it: present, no version, no ✗.
-    const stalled: Evidence = { output: 'harmonia · project "flora" (registered)\norchestrator google/gemini-3.7-flash', exitCode: null, durationMs: 6000, stalled: true }
-    expect(interpretHarmonia(stalled)).toMatchObject({ ok: null, detail: expect.stringContaining('no answer to --version') })
-    expect(interpretHarmonia(ev('harmonia 1.0.0'))).toMatchObject({ ok: true, detail: 'harmonia 1.0.0' })
-  })
-
   it('formats one line per probe with the hint underneath', () => {
     const text = formatProbes([
       { name: 'node', ok: true, detail: 'v22' },
       { name: 'codex', ok: false, detail: 'cannot load its config', hint: 'fix it' },
-      { name: 'harmonia', ok: null, detail: 'not installed (optional)' }
+      { name: 'providers', ok: null, detail: 'none configured (optional)' }
     ])
     expect(text).toContain('✓ node')
     expect(text).toContain('✗ codex')
     expect(text).toContain('→ fix it')
-    expect(text).toContain('· harmonia')
+    expect(text).toContain('· providers')
   })
 })
 

@@ -23,14 +23,14 @@ match the schema: /changes must be string; /checks must be string». Прого�
 
 1. **Схема в промпте.** Если у контракта есть `schema`, к инструкции про блок ```json дописывается сама
    схема («must match this JSON Schema, including the type of every field»). Для всех агентных исполнителей
-   одинаково: claude-code, codex, antigravity, harmonia, api.
+   одинаково: claude-code, codex, antigravity, api.
 2. **Исправление формы (`output_repair`).** Если агент закончил работу (exit 0), а ответ не прошёл контракт
    (не JSON, нет блока, пусто, не по схеме), флора не роняет шаг, а возвращается к тому же агенту:
    - `resume` — в ту же сессию, если адаптер умеет её продолжать и id известен: claude-code
      `claude -p --resume <session_id>`, codex `codex exec … resume <thread_id>`, antigravity
      `agy --conversation <conversation_id>`. Id адаптеры теперь достают из своих потоков (`session_id`,
      `thread.started.thread_id`, `conversation_id`) и кладут в `Evidence.sessionId`;
-   - `fresh` — иначе (harmonia, api, неизвестный id, сессию не удалось продолжить): один короткий новый
+   - `fresh` — иначе (api, неизвестный id, сессию не удалось продолжить): один короткий новый
      запрос тем же исполнителем, в нём цитата невалидного ответа (хвост до 32 КБ), ошибки и схема.
    Сообщение на английском: ошибки как есть (JSON pointer и причина), схема, «Do not redo the work, do not
    change files and do not run commands; return the same result in the required form.»
@@ -38,7 +38,7 @@ match the schema: /changes must be string; /checks must be string». Прого�
    `--mcp-config` и `--disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit`; codex — `--sandbox
    read-only`, из `executor.args` выкинуты `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`,
    `--yolo`, `-s/--sandbox`, личные MCP-серверы выключены, контрактные не монтируются; antigravity —
-   read-настройки без `--mode` даже у `access: write`. Fallback через `execute` (harmonia, api) идёт с теми же
+   read-настройки без `--mode` даже у `access: write`. Fallback через `execute` (api) идёт с теми же
    правами, что у шага, и без MCP.
 4. **Настройка.** `output_repair: { attempts, timeout_min }` — в корне workflow (умолчание для всех агентных
    шагов), на шаге, на parallel-шаге (для веток) и на ветке. `attempts` по умолчанию 2, `0` — прежнее

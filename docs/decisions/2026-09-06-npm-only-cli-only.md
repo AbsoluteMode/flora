@@ -16,7 +16,7 @@ Claude Desktop), с очередью заявок, токенами claim и hea
 
 Флора распространяется только как npm-пакет: `npm install -g @absolutemode/flora` или тот же тарбол с
 релиза. Исполнитель шага — только то, что флора запускает сама на этой машине: `claude-code`, `codex`,
-`harmonia`, `command` и явно настроенный `api`. Харнесс `external`, очередь `src/bridge`, фоновые
+`command` и явно настроенный `api`. Харнесс `external`, очередь `src/bridge`, фоновые
 прогоны в MCP-сервере (`start_workflow`, `claim_step` и остальные), `installers/`, `scripts/` сборки
 дистрибутивов и матрица CI под них убраны.
 

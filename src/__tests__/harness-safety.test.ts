@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { runCommand } from '../adapters/command'
 import { codexArgs, disableServersArg, parseCodexStream } from '../adapters/codex'
 import { claudeArgs, parseClaudeStream } from '../adapters/claude-code'
-import { interpretClaude, interpretCodex, interpretHarmonia } from '../doctor'
+import { interpretClaude, interpretCodex } from '../doctor'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'flora harness ')) })
@@ -37,7 +37,6 @@ it('keeps personal Claude MCP servers out of steps with no declared servers', ()
 it('never calls failed version/status probes ready', () => {
   const bad = { exitCode: 1, output: 'failed', durationMs: 1 }
   const good = { ...bad, exitCode: 0, output: '1.0' }
-  expect(interpretHarmonia(bad).ok).not.toBe(true)
   expect(interpretClaude(bad, { ...good, output: '{"loggedIn":true}' }, {}).ok).not.toBe(true)
   expect(interpretCodex(good, { ...bad, output: 'Logged in using ChatGPT' }, {}).ok).not.toBe(true)
 })

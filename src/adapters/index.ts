@@ -3,7 +3,6 @@ import { commandAdapter } from './command'
 import { claudeCodeAdapter } from './claude-code'
 import { codexAdapter } from './codex'
 import { antigravityAdapter } from './antigravity'
-import { harmoniaAdapter } from './harmonia'
 import { apiAdapter } from './api'
 
 export type { ExecuteInput, HarnessAdapter, RepairInput } from './types'
@@ -13,7 +12,6 @@ const ADAPTERS: Record<string, HarnessAdapter> = {
   'claude-code': claudeCodeAdapter,
   codex: codexAdapter,
   antigravity: antigravityAdapter,
-  harmonia: harmoniaAdapter,
   api: apiAdapter
 }
 

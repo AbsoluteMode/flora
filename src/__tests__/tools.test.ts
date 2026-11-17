@@ -35,7 +35,7 @@ describe('tools contract', () => {
   })
 
   it('refuses tools on harnesses without an MCP client, in code and in the schema', () => {
-    for (const harness of ['command', 'harmonia']) {
+    for (const harness of ['command', 'antigravity']) {
       const spec = agentStep([readTool], harness)
       if (harness === 'command') spec.steps[0].run = 'x'
       expect(() => validateWorkflow(spec)).toThrow(/cannot mount tools/)
